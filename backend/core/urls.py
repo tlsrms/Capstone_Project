@@ -4,7 +4,7 @@ from . import views
 
 router = DefaultRouter()
 
-router.register('documents', views.DocumentViewSet, basename='document')
+router.register('', views.DocumentViewSet, basename='document')
 
 urlpatterns = [
     path('', include(router.urls)),
