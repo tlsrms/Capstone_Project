@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+from datetime import timedelta
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -40,7 +41,7 @@ INSTALLED_APPS = [
 
     # 1. 도구
     'rest_framework',            # API 도구
-    'rest_framework.authtoken',  # 1단계 이메일 로그인용 'Token' 인증
+    'rest_framework_simplejwt',  # 1단계 이메일 로그인용 'Token' 인증
     'corsheaders',               # 'CORS' (보안 허가증) 도구
 
     # 2. 앱
@@ -137,16 +138,17 @@ AUTH_USER_MODEL = 'users.CustomUser'
 # "일단 개발 중이니, 모든 주소에서 오는 요청을 다 허용" (CORS)
 CORS_ALLOW_ALL_ORIGINS = True
 
-# "API 요청이 오면, 기본적으로 'Token' 통행증을 검사"
+GOOGLE_OAUTH_CLIENT_ID = "644535033601-kv8h052g252hpu14se2tblo3htu5t5c4.apps.googleusercontent.com"
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
 }
 
-GOOGLE_OAUTH_CLIENT_ID = "644535033601-kv8h052g252hpu14se2tblo3htu5t5c4.apps.googleusercontent.com"
-REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
-    ),
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),   # Access 토큰 만료 시간 (예: 1시간)
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),    # Refresh 토큰 만료 시간 (예: 7일)
+    
+    # 'Token' 방식과 달리, 헤더에 'Bearer' 키워드를 사용합니다.
+    "AUTH_HEADER_TYPES": ("Bearer",), 
 }
