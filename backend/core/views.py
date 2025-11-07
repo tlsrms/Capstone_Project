@@ -90,3 +90,4 @@ class DocumentTagDetailView(APIView):
 
         # 4. API 명세서 V2에 맞게 204 응답 반환
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
