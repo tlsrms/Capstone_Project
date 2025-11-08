@@ -23,6 +23,10 @@ class DocumentViewSet(viewsets.ModelViewSet):
         """ (POST) '글쓴이'를 나로 자동 지정 """
         serializer.save(author=self.request.user)
 
+# ---------------------------------------------------
+# 2.6 BE: 태그 기능 뷰
+# ---------------------------------------------------
+
 class TagViewSet(mixins.CreateModelMixin,         # 1. (POST /api/tags/) 태그 생성
                 mixins.ListModelMixin,           # 2. (GET /api/tags/) 태그 목록 조회
                 viewsets.GenericViewSet):
@@ -38,6 +42,7 @@ class TagViewSet(mixins.CreateModelMixin,         # 1. (POST /api/tags/) 태그 
 class DocumentTagView(APIView):
     """
     [문서-태그] 관계를 '추가'
+    POST /api/documents/<int:doc_id>/tags/
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -72,6 +77,7 @@ class DocumentTagView(APIView):
 class DocumentTagDetailView(APIView):
     """
     [문서-태그] 관계를 '삭제' (DELETE)
+    DELETE /api/documents/<int:doc_id>/tags/<int:tag_id>/
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -91,3 +97,47 @@ class DocumentTagDetailView(APIView):
         # 4. API 명세서 V2에 맞게 204 응답 반환
         return Response(status=status.HTTP_204_NO_CONTENT)
     
+# ---------------------------------------------------
+# 2.3 BE: "정리하기" 기능 뷰
+# ---------------------------------------------------
+class OrganizeView(APIView):
+    """
+    "정리하기" 실행
+    POST /api/organize/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+
+        # "분류 안 된(False)" 문서만 가져오기
+        documents_to_organize = TextDocument.objects.filter(
+            author=user,
+            is_organized=False
+        )
+        
+        doc_count = documents_to_organize.count()
+        if doc_count == 0:
+            return Response(
+                {"message": "새로 정리할 문서가 없습니다."},
+                status=status.HTTP_200_OK
+            )
+
+        # [비동기 작업 시작]
+        # (실제 구현)
+        # TODO: 
+        # (1) 2.1(Ollama) 호출해서 이 'documents_to_organize'를 분석
+        # (2) 2.2(Fuseki)에 트리플 저장
+        # (3) 모두 성공하면, 이 문서들의 'is_organized' 깃발을 True로 변경
+        #
+        # for doc in documents_to_organize:
+        #     doc.is_organized = True
+        #     doc.save() 
+        #
+        
+        # "202 Accepted" 응답
+        return Response(
+            {"message": f"새로운 {doc_count}개의 문서에 대한 분석 및 정리를 시작합니다."},
+            status=status.HTTP_202_ACCEPTED
+        )

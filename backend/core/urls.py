@@ -21,11 +21,17 @@ urlpatterns = [
         views.DocumentTagView.as_view(), 
         name='document-tag-add'
     ),
-    
     # 문서에서 태그 '삭제'용 커스텀 URL
     path(
         'documents/<int:doc_id>/tags/<int:tag_id>/', 
         views.DocumentTagDetailView.as_view(), 
         name='document-tag-remove'
+    ),
+
+    # "정리하기" URL
+    path(
+        'organize/', 
+        views.OrganizeView.as_view(), 
+        name='document-organize'
     ),
 ]

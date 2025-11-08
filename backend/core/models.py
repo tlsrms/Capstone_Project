@@ -24,5 +24,7 @@ class TextDocument(models.Model):
         blank=True
     )
 
+    is_organized = models.BooleanField(default=False)
+
     def __str__(self):
         return self.title
