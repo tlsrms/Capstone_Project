@@ -17,3 +17,4 @@ rsa==4.9.1
 sqlparse==0.5.3
 tzdata==2025.2
 urllib3==2.5.0
+sparqlwrapper==2.0.0

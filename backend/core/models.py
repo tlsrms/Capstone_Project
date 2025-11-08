@@ -25,6 +25,7 @@ class TextDocument(models.Model):
     )
 
     is_organized = models.BooleanField(default=False)
-
+    summary = models.TextField(blank=True, default='') # AI 요약본
+    
     def __str__(self):
         return self.title
