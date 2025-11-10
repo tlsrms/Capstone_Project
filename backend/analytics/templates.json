@@ -1,0 +1,34 @@
+{
+  "version": "v1",
+  "categories": {
+    "sseukssak:DevPlanning":        { "label": "개발자-기획" },
+    "sseukssak:DevDevelopment":     { "label": "개발자-개발" },
+    "sseukssak:DevDeployment":      { "label": "개발자-배포" },
+    "sseukssak:DevDebugging":       { "label": "개발자-디버깅" },
+    "sseukssak:DevCollaboration":   { "label": "개발자-협업" },
+    "sseukssak:DevLearning":        { "label": "개발자-학습" },
+
+    "sseukssak:StuLearning":        { "label": "학생-학습" },
+    "sseukssak:StuResearch":        { "label": "학생-연구" },
+    "sseukssak:StuAssignment":      { "label": "학생-과제" },
+    "sseukssak:StuCollaboration":   { "label": "학생-협업" },
+    "sseukssak:StuSchedule":        { "label": "학생-일정" },
+
+    "sseukssak:OfficePlan":         { "label": "회사원-계획" },
+    "sseukssak:OfficeCommunication":{ "label": "회사원-소통" },
+    "sseukssak:OfficeWorkLogs":     { "label": "회사원-일정&기록" },
+    "sseukssak:OfficeInvestigation":{ "label": "회사원-조사" },
+    "sseukssak:OfficeAdministration":{ "label": "회사원-행정" },
+
+    "sseukssak:DefaultSchedule":    { "label": "일반-스케줄" },
+    "sseukssak:DefaultReports":     { "label": "일반-보고서" },
+    "sseukssak:DefaultData":        { "label": "일반-자료" },
+    "sseukssak:DefaultEducation":   { "label": "일반-교육" },
+    "sseukssak:DefaultExternal":    { "label": "일반-외부업무" },
+
+    "sseukssak:HobbyMainJob":       { "label": "취미-본업" },
+    "sseukssak:HobbyLeisure":       { "label": "취미-여가" },
+    "sseukssak:HobbyTravel":        { "label": "취미-여행" },
+    "sseukssak:HobbyCreation":      { "label": "취미-창작" }
+  }
+}
