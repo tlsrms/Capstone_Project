@@ -3,35 +3,42 @@ from typing import Dict, List
 
 
 def compute_cleanliness(
-    total_documents: int,
-    classified_documents: int,
-    linked_documents: int = 0,
-    tagged_documents: int = 0,
-    w_classified: float = 0.6,
-    w_linked: float = 0.25,
-    w_tagged: float = 0.15,
+    total_files: int,
+    meaningless_count: int,
+    fragmented_count: int,
+    too_shallow_count: int,
+    too_deep_count: int,
 ) -> float:
     """
-    깔끔지수 = 분류율 + 연결성 + 태그 활용도를 가중합으로 계산.
-    - total_documents: 전체 문서 수
-    - classified_documents: hasType 붙은 문서 수
-    - linked_documents: refersTo 등 관계가 있는 문서 수
-    - tagged_documents: 태그 하나 이상 가진 문서 수
+    [파일 구조 기반 깔끔지수 v2]
+
+    깔끔지수 = 100 - (0.25*A + 0.25*B + 0.35*C + 0.15*D)
+
+    - A: 무의미한 제목 비율 (meaningless_count / total_files)
+    - B: 파편화된 파일 비율 (fragmented_count / total_files)
+    - C: 너무 얕은 깊이의 파일 비율 (too_shallow_count / total_files)
+          예: depth == 0 (바탕화면/최상위 등에 방치된 경우)
+    - D: 너무 깊은 깊이의 파일 비율 (too_deep_count / total_files)
+          예: depth >= 5
+
+    total_files 가 0이면 0.0 반환.
+    반환값은 0.0 ~ 100.0 (점수) 범위.
     """
-    if total_documents <= 0:
+    if total_files <= 0:
         return 0.0
 
-    classified_ratio = classified_documents / total_documents
-    linked_ratio = linked_documents / total_documents
-    tagged_ratio = tagged_documents / total_documents
+    a = meaningless_count / total_files
+    b = fragmented_count / total_files
+    c = too_shallow_count / total_files
+    d = too_deep_count / total_files
 
-    score = (
-        w_classified * classified_ratio
-        + w_linked * linked_ratio
-        + w_tagged * tagged_ratio
-    )
-    # 0.0 ~ 1.0 범위로 제한
-    return max(0.0, min(1.0, score))
+    # 각 비율은 0~1, 가중치는 문제에서 제시한 대로 적용
+    penalty = 0.25 * (a * 100) + 0.25 * (b * 100) + 0.35 * (c * 100) + 0.15 * (d * 100)
+    # = 25a + 25b + 35c + 15d 와 동일
+
+    score = 100.0 - penalty
+    # 0~100 사이로 제한
+    return max(0.0, min(100.0, score))
 
 
 def build_buckets(
@@ -141,3 +148,97 @@ def build_radar_main_mode(category_counts: Dict[str, int]) -> List[Dict]:
             }
         )
     return radar
+
+
+def build_radar_hobby_mode(category_counts: Dict[str, int]) -> List[Dict]:
+    """
+    mode=hobby 일 때 레이더 축 값 생성.
+    취미 관련 타입 비율을 여가 / 여행 / 창작 / 본업으로 나눠서 보여준다.
+    """
+    groups = {
+        "Hobby_Leisure": [
+            "sseukssak:MovieDrama",
+            "sseukssak:Reading",
+            "sseukssak:Music",
+            "sseukssak:Game",
+            "sseukssak:Exercise",
+            "sseukssak:Pet",
+        ],
+        "Hobby_Travel": [
+            "sseukssak:TravelLog",
+            "sseukssak:TravelPhoto",
+            "sseukssak:TravelPlan",
+        ],
+        "Hobby_Creation": [
+            "sseukssak:Blog",
+            "sseukssak:Writing",
+            "sseukssak:Drawing",
+            "sseukssak:Diary",
+        ],
+        "Hobby_MainJob": [
+            "sseukssak:HobbyMainJob",
+        ],
+    }
+
+    axis_values: Dict[str, int] = {}
+    for axis, cats in groups.items():
+        axis_values[axis] = sum(category_counts.get(c, 0) for c in cats)
+
+    total = sum(axis_values.values()) or 1
+
+    labels = {
+        "Hobby_Leisure": "여가",
+        "Hobby_Travel": "여행",
+        "Hobby_Creation": "창작",
+        "Hobby_MainJob": "본업",
+    }
+
+    radar: List[Dict] = []
+    for axis, value in axis_values.items():
+        radar.append(
+            {
+                "axis": axis,
+                "label": labels.get(axis, axis),
+                "value": round(value / total, 3),
+            }
+        )
+    return radar
+
+
+def build_cleanliness_summary(
+    before: Dict[str, int],
+    after: Dict[str, int],
+) -> Dict:
+    """
+    파일 기반 지표를 사용한 정리 전/후 깔끔지수 비교.
+
+    before/after 예시:
+    {
+        "total_files": 100,
+        "meaningless_count": 10,
+        "fragmented_count": 5,
+        "too_shallow_count": 20,
+        "too_deep_count": 3
+    }
+    """
+    score_before = compute_cleanliness(
+        total_files=before.get("total_files", 0),
+        meaningless_count=before.get("meaningless_count", 0),
+        fragmented_count=before.get("fragmented_count", 0),
+        too_shallow_count=before.get("too_shallow_count", 0),
+        too_deep_count=before.get("too_deep_count", 0),
+    )
+
+    score_after = compute_cleanliness(
+        total_files=after.get("total_files", 0),
+        meaningless_count=after.get("meaningless_count", 0),
+        fragmented_count=after.get("fragmented_count", 0),
+        too_shallow_count=after.get("too_shallow_count", 0),
+        too_deep_count=after.get("too_deep_count", 0),
+    )
+
+    return {
+        "before": round(score_before, 2),
+        "after": round(score_after, 2),
+        "improvement": round(score_after - score_before, 2),
+    }
