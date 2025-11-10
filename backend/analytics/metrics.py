@@ -8,37 +8,40 @@ def compute_cleanliness(
     fragmented_count: int,
     too_shallow_count: int,
     too_deep_count: int,
+    w_title: float = 0.25,    # 논문 기본값 (균등 가중치)
+    w_frag: float = 0.25,
+    w_shallow: float = 0.25,
+    w_deep: float = 0.25,
 ) -> float:
     """
-    [파일 구조 기반 깔끔지수 v2]
+    [파일 구조 기반 깔끔지수 v3: 논문 공식 + 가중치 확장형]
 
-    깔끔지수 = 100 - (0.25*A + 0.25*B + 0.35*C + 0.15*D)
+    깔끔지수 = 100 - (w_title*A + w_frag*B + w_shallow*C + w_deep*D)
 
     - A: 무의미한 제목 비율 (meaningless_count / total_files)
     - B: 파편화된 파일 비율 (fragmented_count / total_files)
     - C: 너무 얕은 깊이의 파일 비율 (too_shallow_count / total_files)
-          예: depth == 0 (바탕화면/최상위 등에 방치된 경우)
+          예: depth == 0 (바탕화면/최상위 폴더 등)
     - D: 너무 깊은 깊이의 파일 비율 (too_deep_count / total_files)
           예: depth >= 5
 
-    total_files 가 0이면 0.0 반환.
+    total_files가 0이면 0.0 반환.
     반환값은 0.0 ~ 100.0 (점수) 범위.
     """
     if total_files <= 0:
         return 0.0
 
-    a = meaningless_count / total_files
-    b = fragmented_count / total_files
-    c = too_shallow_count / total_files
-    d = too_deep_count / total_files
+    # 각 비율 계산 (0~100%)
+    A = meaningless_count / total_files * 100
+    B = fragmented_count / total_files * 100
+    C = too_shallow_count / total_files * 100
+    D = too_deep_count / total_files * 100
 
-    # 각 비율은 0~1, 가중치는 문제에서 제시한 대로 적용
-    penalty = 0.25 * (a * 100) + 0.25 * (b * 100) + 0.35 * (c * 100) + 0.15 * (d * 100)
-    # = 25a + 25b + 35c + 15d 와 동일
+    # 가중합 계산
+    penalty = w_title * A + w_frag * B + w_shallow * C + w_deep * D
 
-    score = 100.0 - penalty
-    # 0~100 사이로 제한
-    return max(0.0, min(100.0, score))
+    # 최종 점수 (0~100 범위로 제한)
+    return max(0.0, min(100.0, 100.0 - penalty))
 
 
 def build_buckets(
@@ -221,21 +224,8 @@ def build_cleanliness_summary(
         "too_deep_count": 3
     }
     """
-    score_before = compute_cleanliness(
-        total_files=before.get("total_files", 0),
-        meaningless_count=before.get("meaningless_count", 0),
-        fragmented_count=before.get("fragmented_count", 0),
-        too_shallow_count=before.get("too_shallow_count", 0),
-        too_deep_count=before.get("too_deep_count", 0),
-    )
-
-    score_after = compute_cleanliness(
-        total_files=after.get("total_files", 0),
-        meaningless_count=after.get("meaningless_count", 0),
-        fragmented_count=after.get("fragmented_count", 0),
-        too_shallow_count=after.get("too_shallow_count", 0),
-        too_deep_count=after.get("too_deep_count", 0),
-    )
+    score_before = compute_cleanliness(**before)
+    score_after = compute_cleanliness(**after)
 
     return {
         "before": round(score_before, 2),
