@@ -13,8 +13,16 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 from datetime import timedelta
 
+# settings.py
+import os
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+FUSEKI_QUERY_ENDPOINT = os.getenv("FUSEKI_QUERY_ENDPOINT", "http://localhost:3030/sseukssak/query")
+FUSEKI_DEFAULT_GRAPH  = os.getenv("FUSEKI_DEFAULT_GRAPH", "")  # 기본 그래프 없으면 빈 문자열 유지
+SSEUKSSAK_SCHEMA_URI  = os.getenv("SSEUKSSAK_SCHEMA_URI", "http://api.sseukssak.com/ontology#")
+CATEGORY_TEMPLATE_PATH = os.getenv("CATEGORY_TEMPLATE_PATH", os.path.join(BASE_DIR, "analytics", "categories.json"))
 
 
 # Quick-start development settings - unsuitable for production
