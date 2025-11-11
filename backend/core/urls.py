@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from .views_dashboard_fuseki import dashboard_view_fuseki
 
 router = DefaultRouter()
 
@@ -34,4 +35,8 @@ urlpatterns = [
         views.OrganizeView.as_view(), 
         name='document-organize'
     ),
+]
+
+urlpatterns += [
+    path("dashboard/", dashboard_view_fuseki),
 ]
