@@ -106,7 +106,7 @@ class DocumentTagDetailView(APIView):
 # ---------------------------------------------------
 class OrganizeView(APIView):
     """
-    [핵심 기능] "정리하기" 실행
+    "정리하기" 실행
     POST /api/organize/
     - 2.1(Ollama) AI 엔진을 호출하여 문서를 분석합니다.
     - 2.2(Fuseki) 온톨로지 DB에 '필수' 트리플과 '발견된' 트리플을 저장합니다.
@@ -127,7 +127,7 @@ class OrganizeView(APIView):
         "TravelLog", "TravelPhoto", "TravelPlan", "Blog", "Writing", "Diary"
     ]
 
-    # [수정] '발견 가능 관계' 목록 재구성 (명확성 확보)
+    # '발견 가능 관계' 목록 재구성 (명확성 확보)
     DISCOVERABLE_PREDICATES = [
         # 1. 내용 (추상적 개념)
         "sseukssak:discussesTopic",  # "이 문서는 ... 주제를 다룹니다" (예: "온톨로지", "4분기 예산")
@@ -145,7 +145,7 @@ class OrganizeView(APIView):
 
     def build_prompt(self, document_content):
         """
-        [최종 수정] Ollama에 보낼 3-Key JSON 프롬프트를 생성합니다.
+        Ollama에 보낼 3-Key JSON 프롬프트를 생성합니다.
         """
         type_list_str = ", ".join(self.SSEUKSSAK_TYPES)
         predicate_list_str = ", ".join(self.DISCOVERABLE_PREDICATES)
@@ -178,7 +178,7 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
 
     def call_ollama(self, prompt, model_name="gemma3:4b"):
         """
-        [수정] Ollama 서버(2.1)에 API 요청을 보내고 3-Key JSON을 파싱합니다.
+        Ollama 서버(2.1)에 API 요청을 보내고 3-Key JSON을 파싱합니다.
         """
         OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
         
@@ -198,7 +198,7 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
             
             ai_result = json.loads(message_content_str) 
 
-            # [수정] 3-Key 규격(Contract) 확인
+            # 3-Key 규격(Contract) 확인
             if not all(k in ai_result for k in ["summary", "type_label", "discovered_triples"]):
                  print(f"[Ollama Error] AI did not return the expected 3-Key JSON: {ai_result}")
                  return None
@@ -217,7 +217,7 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
 
     def save_to_fuseki(self, user, doc, ai_result):
         """
-        [최종 수정] '필수' 트리플과 '발견된' 트리플을 Fuseki(2.2)에 저장합니다.
+        '필수' 트리플과 '발견된' 트리플을 Fuseki(2.2)에 저장합니다.
         """
         FUSEKI_UPDATE_ENDPOINT = "http://localhost:3030/sseukssak/update" 
         SCHEMA_URI = "http://api.sseukssak.com/ontology#"
@@ -232,10 +232,6 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
         query_lines.append(f"<{doc_uri}> sseukssak:hasOwner <{user_uri}> .")
         query_lines.append(f"<{doc_uri}> sseukssak:hasType <{type_uri}> .")
         query_lines.append(f"<{type_uri}> rdfs:label \"{ai_result['type_label']}\" .")
-        
-        # ---------------------------------------------------
-        # [삭제] 2-Step 검증 (reference_strings) 로직 완전 삭제
-        # ---------------------------------------------------
         
         # 2. "발견된 트리플" 추가 (LLM 제어: 유연성 확보)
         for triple_pair in ai_result.get('discovered_triples', []):
