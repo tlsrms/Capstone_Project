@@ -26,6 +26,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         """ (POST) '글쓴이'를 나로 자동 지정 """
         serializer.save(author=self.request.user)
+    
+    def perform_update(self, serializer):
+        """
+        (PUT/PATCH) 문서가 업데이트될 때 호출됩니다.
+        """
+        print(f"[Trigger] Document {serializer.instance.id} updated. Flagging for re-organization.")
+        serializer.save(is_organized=False, summary="")
 
 # ---------------------------------------------------
 # 2.6 BE: 태그 기능 뷰
@@ -217,7 +224,7 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
 
     def save_to_fuseki(self, user, doc, ai_result):
         """
-        '필수' 트리플과 '발견된' 트리플을 Fuseki(2.2)에 저장합니다.
+        (1)기존 트리플을 삭제하고, (2)새 트리플을 Fuseki에 저장합니다.
         """
         FUSEKI_UPDATE_ENDPOINT = "http://localhost:3030/sseukssak/update" 
         SCHEMA_URI = "http://api.sseukssak.com/ontology#"
@@ -226,50 +233,69 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
         user_uri = f"{SCHEMA_URI}User_{user.id}"
         type_uri = f"{SCHEMA_URI}{ai_result['type_label']}"
 
-        query_lines = [] # 저장할 트리플 목록
+        # ---------------------------------------------------
+        # 1. (DELETE) 이 문서에 연결된 '모든' 트리플 삭제
+        # ---------------------------------------------------
+        # (hasOwner, hasType, discovered_triples 모두 삭제)
+        delete_query = f"""
+        PREFIX sseukssak: <{SCHEMA_URI}>
 
-        # 1. "필수 트리플" 생성 (백엔드 제어: 안정성 확보)
-        query_lines.append(f"<{doc_uri}> sseukssak:hasOwner <{user_uri}> .")
+        DELETE WHERE {{
+          # 이 문서 ID를 '주어(Subject)'로 갖는 모든 트리플을 삭제합니다.
+          <{doc_uri}> ?predicate ?object .
+        }}
+        """
+
+        try:
+            sparql_delete = SPARQLWrapper(FUSEKI_UPDATE_ENDPOINT)
+            sparql_delete.setMethod(POST)
+            sparql_delete.setQuery(delete_query)
+            sparql_delete.query()
+            print(f"[Fuseki Cleansing] All old triples for {doc_uri} deleted.")
+        except Exception as e:
+            print(f"[Fuseki Error] Failed to DELETE triples (doc_id: {doc.id}): {e}")
+            return False # 삭제에 실패하면 '쓰기'를 진행하지 않음
+
+        # ---------------------------------------------------
+        # 2. (INSERT) 새 트리플 생성 (기존 로직과 동일)
+        # ---------------------------------------------------
+        query_lines = [] 
+        # hasOwner를 '다시' 추가합니다.
+        query_lines.append(f"<{doc_uri}> sseukssak:hasOwner <{user_uri}> .") 
         query_lines.append(f"<{doc_uri}> sseukssak:hasType <{type_uri}> .")
         query_lines.append(f"<{type_uri}> rdfs:label \"{ai_result['type_label']}\" .")
         
-        # 2. "발견된 트리플" 추가 (LLM 제어: 유연성 확보)
+        # 발견된 트리플을 '다시' 추가합니다.
         for triple_pair in ai_result.get('discovered_triples', []):
             if isinstance(triple_pair, list) and len(triple_pair) == 2:
                 predicate_raw = str(triple_pair[0]).strip()
-                obj = str(triple_pair[1]).strip().replace('"', '\\"') # 간단한 이스케이프
-
-                # 'sseukssak:' 접두사 처리 및 허용 목록 검증
+                obj = str(triple_pair[1]).strip().replace('"', '\\"') 
                 predicate = predicate_raw if predicate_raw.startswith("sseukssak:") else f"sseukssak:{predicate_raw}"
                 
                 if predicate in self.DISCOVERABLE_PREDICATES:
-                     # 'predicate'는 URI로, 'object'는 문자열 리터럴(")로 저장
                      query_lines.append(f"<{doc_uri}> <{SCHEMA_URI}{predicate.split(':')[-1]}> \"{obj}\" .")
                 else:
                     print(f"[Fuseki Warn] LLM generated a non-allowed predicate: {predicate}")
 
-        # 3. 모든 트리플을 하나의 쿼리로 묶기
         query_body = "\n".join(query_lines)
-        query = f"""
+        insert_query = f"""
         PREFIX sseukssak: <{SCHEMA_URI}>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         INSERT DATA {{ {query_body} }}
         """
         
-        # 4. Fuseki에 SPARQL 'UPDATE' 요청 전송
+        # 3. Fuseki에 SPARQL 'INSERT' 요청 전송
         try:
-            sparql = SPARQLWrapper(FUSEKI_UPDATE_ENDPOINT)
-            sparql.setMethod(POST)
-            sparql.setQuery(query)
-            sparql.query()
+            sparql_insert = SPARQLWrapper(FUSEKI_UPDATE_ENDPOINT)
+            sparql_insert.setMethod(POST)
+            sparql_insert.setQuery(insert_query)
+            sparql_insert.query()
             
-            print(f"[Fuseki Success] {doc_uri} -> {type_uri} (Required triples saved)")
-            if ai_result.get('discovered_triples'):
-                print(f"[Fuseki Success] {len(ai_result['discovered_triples'])} 'discovered' triples saved")
+            print(f"[Fuseki Success] {doc_uri} -> {type_uri} (New triples saved)")
             return True
 
         except Exception as e:
-            print(f"[Fuseki Error] Failed to save triples (doc_id: {doc.id}): {e}")
+            print(f"[Fuseki Error] Failed to INSERT new triples (doc_id: {doc.id}): {e}")
             return False
             
     def post(self, request):
