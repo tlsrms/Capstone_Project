@@ -13,8 +13,7 @@ from .serializers import DocumentSerializer, TagSerializer
 
 import os 
 from django.db.models import Q
-from analytics.metrics import compute_cleanliness 
-from analytics.utils import calculate_fragmentation 
+from analytics.metrics import compute_cleanliness, calculate_fragmentation 
 
 from collections import defaultdict, Counter 
 
