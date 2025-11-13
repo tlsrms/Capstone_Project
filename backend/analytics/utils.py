@@ -1,19 +1,20 @@
 import os
 from collections import Counter
+from collections import Counter, defaultdict
 from core.models import TextDocument
 from users.models import CustomUser
 from SPARQLWrapper import SPARQLWrapper, JSON
 
-def calculate_fragmentation(user: CustomUser) -> int:
+def calculate_fragmentation(user: CustomUser) -> (int, set): 
     """
     R_frag (파편화) 지표를 계산합니다: sum(n_g - m_g)
-    BE가 RDB(file_path)와 Fuseki(type)를 조합하여 계산합니다.
+    (수정) 파편화된 파일의 ID 목록(set)도 함께 반환합니다.
     """
     SCHEMA_URI = "http://api.sseukssak.com/ontology#"
     FUSEKI_QUERY_ENDPOINT = "http://localhost:3030/sseukssak/query"
     user_uri = f"{SCHEMA_URI}User_{user.id}"
 
-    # 1. (Fuseki) 모든 문서의 'Type(주제 그룹 g)'를 가져옵니다.
+    # 1. (Fuseki)
     try:
         query = f"""
         PREFIX sseukssak: <{SCHEMA_URI}>
@@ -30,43 +31,48 @@ def calculate_fragmentation(user: CustomUser) -> int:
         results = sparql.query().convert()
     except Exception as e:
         print(f"[calculate_fragmentation Error] Fuseki query failed: {e}")
-        return 0 # Fuseki 연결 실패 시 0 반환
+        return 0, set() 
 
-    # doc_id -> type 매핑 (예: {18: "PlanningDocument"})
     doc_id_to_type = {
         int(res['doc_id_str']['value']): res['type']['value']
         for res in results['results']['bindings']
     }
     if not doc_id_to_type:
-        return 0
+        return 0, set() 
 
-    # 2. (RDB) 모든 문서의 '폴더(path)'를 가져옵니다.
+    # 2. (RDB)
     doc_id_to_folder = {
-        doc.id: os.path.dirname(os.path.normpath(doc.file_path)) # file_path에서 '폴더'만 추출
+        doc.id: os.path.dirname(os.path.normpath(doc.file_path))
         for doc in TextDocument.objects.filter(
             author=user, 
-            id__in=doc_id_to_type.keys() # Fuseki에 있는 문서들만
+            id__in=doc_id_to_type.keys()
         ).only("id", "file_path")
     }
 
-    # 3. '주제 그룹(g)'별로 '폴더' 카운트
-    topic_to_folders = {}
+    # 3. [수정] '주제 그룹(g)'별로 '(폴더, doc_id)' 튜플 리스트 생성
+    topic_to_folder_docs = defaultdict(list)
     for doc_id, topic in doc_id_to_type.items():
         folder = doc_id_to_folder.get(doc_id)
         if not folder or folder == ".": continue
-            
-        if topic not in topic_to_folders:
-            topic_to_folders[topic] = []
-        topic_to_folders[topic].append(folder)
+        topic_to_folder_docs[topic].append((folder, doc_id)) # (폴더, doc_id) 저장
 
     # 4. n_g - m_g (파편화 값) 계산
     total_fragmented_count = 0
-    for topic, folders in topic_to_folders.items():
-        n_g = len(folders) # (n_g) 이 주제의 총 파일 수
+    fragmented_doc_ids = set() # 파편화된 ID를 담을 셋
+
+    for topic, folder_docs in topic_to_folder_docs.items():
+        n_g = len(folder_docs) # (n_g) 이 주제의 총 파일 수
         if n_g <= 1: continue
             
-        m_g = Counter(folders).most_common(1)[0][1] # (m_g) 가장 많은 파일이 모인 폴더의 개수
+        # 이 주제에서 가장 빈번하게 등장한 '폴더' 찾기
+        folder_list = [fd[0] for fd in folder_docs]
+        most_common_folder, m_g = Counter(folder_list).most_common(1)[0]
         
         total_fragmented_count += (n_g - m_g)
+        
+        # '파편화된' 파일 (가장 큰 그룹에 속하지 않은) ID 수집
+        for folder, doc_id in folder_docs:
+            if folder != most_common_folder:
+                fragmented_doc_ids.add(doc_id)
 
-    return total_fragmented_count
+    return total_fragmented_count, fragmented_doc_ids 

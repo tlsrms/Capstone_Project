@@ -362,75 +362,101 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
 # ---------------------------------------------------
 class NeatnessScoreView(APIView):
     """
-    "깔끔지수" 계산
+    "깔끔지수" 계산 (논문 기반) + 감점 파일 목록 반환
     GET /api/neatness-score/
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    def _format_doc_details(self, doc: TextDocument) -> dict:
+        """Helper: 응답용으로 문서 정보를 간단히 포맷합니다."""
+        return {
+            "id": doc.id,
+            "title": doc.title,
+            "path": doc.file_path
+        }
+
     def get(self, request):
         user = request.user
         
-        # 1. RDB에서 사용자의 모든 문서 정보(RDB) 가져오기
-        user_docs = TextDocument.objects.filter(author=user, file_path__isnull=False).exclude(file_path="")
-        total_files = user_docs.count()
+        # 1. RDB에서 모든 문서 정보를 '한 번만' 가져옴 
+        user_docs_qs = TextDocument.objects.filter(
+            author=user, file_path__isnull=False
+        ).exclude(file_path="")
+        
+        # 빠른 조회를 위해 {id: doc} 딕셔너리로 변환
+        user_docs_map = {doc.id: doc for doc in user_docs_qs}
+        total_files = len(user_docs_map)
 
         if total_files == 0:
             return Response({"score": 0.0, "details": {}}, status=status.HTTP_200_OK)
 
-        # 2. BE가 RDB 기반으로 3대 지표 계산
-        meaningless_count = 0 # R_title
-        too_shallow_count = 0 # R_shallow
-        too_deep_count = 0    # R_deep
+        # 2. BE가 RDB 기반으로 3대 지표 계산 + 감점 파일 목록 생성
+        meaningless_files = []
+        too_shallow_files = []
+        too_deep_files = []
 
-        # A) R_title (무의미 제목)
-        meaningless_count = user_docs.filter(
-                    Q(title__exact="") |                 # 1. 제목이 아예 없음
-                    Q(title__icontains="제목 없음") |     # 2. "제목 없음"
-                    Q(title__icontains="Untitled") |      # 3. "Untitled" (기존)
-                    Q(title__icontains="untitled") |      # 4. "untitled" (신규)
-                    Q(title__icontains="document") |      # 5. "document" (신규)
-                    Q(title__icontains="새 문서")         # 6. "새 문서" (신규)
-                ).count()
-        
-        for doc in user_docs.only("file_path"):
+        meaningless_keywords = ["제목 없음", "Untitled", "untitled", "document", "새 문서"]
+
+        for doc in user_docs_map.values():
+            # A) R_title (무의미 제목)
+            is_meaningless = False
+            if doc.title == "":
+                is_meaningless = True
+            else:
+                # 'untitled.txt' 같은 케이스를 잡기 위해 파일명(경로)도 검사
+                filename = os.path.basename(doc.file_path)
+                if any(keyword.lower() in doc.title.lower() or keyword.lower() in filename.lower() for keyword in meaningless_keywords):
+                    is_meaningless = True
+                    
+            if is_meaningless:
+                meaningless_files.append(self._format_doc_details(doc))
+
+            # B) R_shallow / R_deep (깊이)
             try:
                 path_str = os.path.normpath(doc.file_path)
-                dir_str = os.path.dirname(path_str) # "C:\Users\Me"
-                
-                # (예) "C:\" -> ["C:"] -> len=1 -> depth=0
-                # (예) "C:\Users" -> ["C:", "Users"] -> len=2 -> depth=1
+                dir_str = os.path.dirname(path_str)
                 depth = len(dir_str.rstrip(os.sep).split(os.sep)) - 1 
                 
-                if depth <= 1: # 논문 정의
-                    too_shallow_count += 1
-                elif depth >= 5: # 논문 정의 (C:\a\b\c\d\e\file.txt -> dir_depth=5)
-                    too_deep_count += 1
+                if depth <= 1: # 얕은 깊이 (depth 0 또는 1)
+                    too_shallow_files.append(self._format_doc_details(doc))
+                elif depth >= 5: # 깊은 깊이 (논문 정의)
+                    too_deep_files.append(self._format_doc_details(doc))
             except Exception:
-                pass
+                pass 
 
-        # 3. B) BE가 (RDB + Fuseki) 기반으로 R_frag 지표 계산
-        # (이 함수는 RDB의 file_path와 Fuseki의 hasType을 둘 다 사용)
-        fragmented_count = calculate_fragmentation(user) 
+        # 3. BE가 (RDB + Fuseki) 기반으로 R_frag 지표 계산
+        fragmented_count, fragmented_doc_ids = calculate_fragmentation(user) 
+        
+        # 4. R_frag 감점 파일 목록 생성
+        fragmented_files = []
+        for doc_id in fragmented_doc_ids:
+            if doc_id in user_docs_map:
+                fragmented_files.append(self._format_doc_details(user_docs_map[doc_id]))
 
-        # 4. (analytics) 팀원이 만든 함수로 4개 지표를 합산
+        # 5. (analytics) 4개 지표 '카운트'를 합산
+        meaningless_count_val = len(meaningless_files)
+        too_shallow_count_val = len(too_shallow_files)
+        too_deep_count_val = len(too_deep_files)
+
         score = compute_cleanliness(
             total_files=total_files,
-            meaningless_count=meaningless_count,
+            meaningless_count=meaningless_count_val,
             fragmented_count=fragmented_count,
-            too_shallow_count=too_shallow_count,
-            too_deep_count=too_deep_count
+            too_shallow_count=too_shallow_count_val,
+            too_deep_count=too_deep_count_val
         )
         
+        # 6. 최종 응답에 '파일 목록' 포함
         return Response(
             {
                 "score": round(score, 2),
                 "details": {
                     "total_files": total_files,
-                    "meaningless_count": meaningless_count,
-                    "fragmented_count": fragmented_count,
-                    "too_shallow_count": too_shallow_count,
-                    "too_deep_count": too_deep_count,
+                    "meaningless": {"count": meaningless_count_val, "files": meaningless_files},
+                    "fragmented": {"count": fragmented_count, "files": fragmented_files},
+                    "shallow": {"count": too_shallow_count_val, "files": too_shallow_files},
+                    "deep": {"count": too_deep_count_val, "files": too_deep_files},
                 }
             },
             status=status.HTTP_200_OK
