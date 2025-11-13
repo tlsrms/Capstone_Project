@@ -40,4 +40,11 @@ urlpatterns = [
         views.NeatnessScoreView.as_view(), 
         name='neatness-score'
     ),
+
+    # 2.5 BE: 대시보드 API URL
+    path(
+        'dashboard/', 
+        views.DashboardView.as_view(), 
+        name='dashboard'
+    ),
 ]

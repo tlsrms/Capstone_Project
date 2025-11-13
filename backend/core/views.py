@@ -16,6 +16,8 @@ from django.db.models import Q
 from analytics.metrics import compute_cleanliness 
 from analytics.utils import calculate_fragmentation 
 
+from collections import defaultdict, Counter 
+
 class DocumentViewSet(viewsets.ModelViewSet): 
     """
     문서(TextDocument)에 대한 CRUD API를 처리하는 뷰셋
@@ -461,3 +463,247 @@ class NeatnessScoreView(APIView):
             },
             status=status.HTTP_200_OK
         )
+    
+# ---------------------------------------------------
+# 2.5 BE: 대시보드 API 뷰 
+# ---------------------------------------------------
+class DashboardView(APIView):
+    """
+    [핵심 기능] "대시보드" 데이터 조회 (온톨로지 추론)
+    GET /api/dashboard/?mode=developer
+    - '본업' 모드: '기타' 없음. 해당 템플릿의 축(e.g., 학생 5축)을 보여줌.
+    - '취미' 모드: (본업/여가/여행/창작/기타 5축)
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    SCHEMA_URI = "http://api.sseukssak.com/ontology#"
+    FUSEKI_QUERY_ENDPOINT = "http://localhost:3030/sseukssak/query"
+
+    # 2.0 설계: 템플릿 최상위 Class (규칙)
+    TEMPLATES_CLASSES = {
+        "developer": "DeveloperTemplate",
+        "student": "StudentTemplate",
+        "office_worker": "OfficeWorkerTemplate",
+        "default": "DefaultTemplate",
+        "hobby": "HobbyTemplate",
+        "work_root": "WorkTemplate",
+        "hobby_root": "HobbyTemplate"
+    }
+
+    # 2.0 설계: 카테고리 라벨 (FE 매핑용)
+    CATEGORY_LABELS = {
+        "sseukssak:DevPlanning": "기획",
+        "sseukssak:DevDevelopment": "개발",
+        "sseukssak:DevDeployment": "배포",
+        "sseukssak:DevDebugging": "디버깅",
+        "sseukssak:DevCollaboration": "협업",
+        "sseukssak:DevLearning": "학습",
+        "sseukssak:StuLearning": "학습",
+        "sseukssak:StuResearch": "연구",
+        "sseukssak:StuAssignment": "과제",
+        "sseukssak:StuCollaboration": "협업",
+        "sseukssak:StuSchedule": "일정",
+        "sseukssak:OfficePlan": "계획",
+        "sseukssak:OfficeCommunication": "소통",
+        "sseukssak:OfficeWorkLogs": "일정&기록",
+        "sseukssak:OfficeInvestigation": "조사",
+        "sseukssak:OfficeAdministration": "행정",
+        "sseukssak:DefaultSchedule": "스케줄",
+        "sseukssak:DefaultReports": "보고서",
+        "sseukssak:DefaultData": "자료",
+        "sseukssak:DefaultEducation": "교육",
+        "sseukssak:DefaultExternal": "외부업무",
+        "sseukssak:HobbyMainJob": "본업",
+        "sseukssak:HobbyLeisure": "여가",
+        "sseukssak:HobbyTravel": "여행",
+        "sseukssak:HobbyCreation": "창작",
+        "sseukssak:Other": "기타"
+    }
+
+    def _execute_sparql_query(self, query: str) -> list:
+        """Helper: SPARQL 쿼리를 Fuseki에 전송하고 JSON 결과를 반환합니다."""
+        try:
+            sparql = SPARQLWrapper(self.FUSEKI_QUERY_ENDPOINT)
+            sparql.setQuery(query)
+            sparql.setReturnFormat(JSON)
+            results = sparql.query().convert()
+            return results.get("results", {}).get("bindings", [])
+        except Exception as e:
+            print(f"[Fuseki Error] Dashboard SPARQL query failed: {e}")
+            return []
+
+    def _get_documents_from_rdb(self, doc_ids: set) -> dict:
+        """Helper: RDB에서 문서 상세 정보를 한 번의 쿼리로 가져옵니다."""
+        if not doc_ids: return {}
+        
+        docs_qs = TextDocument.objects.filter(id__in=doc_ids)
+        
+        doc_map = {}
+        for doc in docs_qs:
+            doc_map[doc.id] = {
+                "id": doc.id,
+                "title": doc.title,
+                "summary": doc.summary,
+                "file_path": doc.file_path,
+                "updated_at": doc.updated_at.isoformat()
+            }
+        return doc_map
+
+    def _build_sparql_query(self, user_uri: str, mode: str, user_job_template_uri: str, template_uri: str) -> str:
+        """
+        [수정] 요청 모드(hobby/developer)와 직업 템플릿에 따라
+        '카테고리'와 '문서 ID'를 추론하는 동적 SPARQL 쿼리를 생성합니다.
+        """
+        
+        base_query = f"""
+        ?doc sseukssak:hasOwner <{user_uri}> .
+        ?doc sseukssak:hasType ?type .
+        BIND(STRAFTER(STR(?doc), "Document_") AS ?doc_id_str)
+        BIND(xsd:integer(?doc_id_str) AS ?doc_id)
+        """
+        
+        hobby_root_uri = f"<{self.SCHEMA_URI}{self.TEMPLATES_CLASSES['hobby_root']}>"
+        work_root_uri = f"<{self.SCHEMA_URI}{self.TEMPLATES_CLASSES['work_root']}>"
+
+        query_parts = []
+        
+        if mode == 'hobby':
+            # [취미 모드]
+            query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* <{self.SCHEMA_URI}HobbyLeisure> . BIND(<{self.SCHEMA_URI}HobbyLeisure> AS ?category_uri) }}")
+            query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* <{self.SCHEMA_URI}HobbyTravel> . BIND(<{self.SCHEMA_URI}HobbyTravel> AS ?category_uri) }}")
+            query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* <{self.SCHEMA_URI}HobbyCreation> . BIND(<{self.SCHEMA_URI}HobbyCreation> AS ?category_uri) }}")
+            query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* {user_job_template_uri} . BIND(<{self.SCHEMA_URI}HobbyMainJob> AS ?category_uri) }}")
+            query_parts.append(f"""
+            {{
+                {base_query}
+                ?type rdfs:subClassOf* {work_root_uri} .
+                FILTER NOT EXISTS {{ ?type rdfs:subClassOf* {user_job_template_uri} . }}
+                BIND(<{self.SCHEMA_URI}Other> AS ?category_uri)
+            }}""")
+        else:
+            # --------------------------------
+            # [본업 모드] 
+            # --------------------------------
+            query_parts.append(f"""
+            
+                {base_query}
+                ?type rdfs:subClassOf* ?category_uri .       
+                ?category_uri rdfs:subClassOf {template_uri} . 
+            
+            """)
+            
+        # 모든 쿼리를 UNION으로 묶어 Fuseki에 요청
+        return f"""
+        PREFIX sseukssak: <{self.SCHEMA_URI}>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        SELECT ?doc_id ?category_uri
+        WHERE {{
+            { ' UNION '.join(query_parts) }
+        }}
+        """
+
+    def get(self, request):
+        user = request.user
+        user_uri = f"{self.SCHEMA_URI}User_{user.id}"
+        
+        # 1. 'mode'와 'tag' 쿼리 파라미터를 가져옴
+        mode = request.query_params.get('mode', 'default') 
+        tag_name = request.query_params.get('tag', None) 
+        
+        user_job_template = user.job_template
+        
+        template_uri_str = self.TEMPLATES_CLASSES.get(mode)
+        if not template_uri_str:
+            mode = 'default'
+            template_uri_str = self.TEMPLATES_CLASSES['default']
+            
+        user_job_template_uri_str = self.TEMPLATES_CLASSES.get(user_job_template, self.TEMPLATES_CLASSES['default'])
+        
+        template_uri = f"<{self.SCHEMA_URI}{template_uri_str}>"
+        user_job_template_uri = f"<{self.SCHEMA_URI}{user_job_template_uri_str}>"
+
+        # 2. (Fuseki) 'mode' 기준으로 모든 문서 ID/카테고리 추론 (수정 없음)
+        full_query = self._build_sparql_query(user_uri, mode, user_job_template_uri, template_uri)
+        sparql_results = self._execute_sparql_query(full_query)
+        
+        # 3. (RDB) [신규] 태그 필터링 적용
+        
+        # 3a. Fuseki가 찾은 모든 문서 ID (예: {42, 43, 44, 45, 46})
+        all_doc_ids_from_fuseki = {int(res["doc_id"]["value"]) for res in sparql_results}
+        
+        # 3b. 'tag_name'이 있다면, RDB에서 이 ID 목록을 다시 필터링
+        if tag_name:
+            # RDB 쿼리: "Fuseki 결과 ID 중에서, 이 태그를 가진 ID만 골라내줘"
+            doc_ids_with_tag = set(TextDocument.objects.filter(
+                author=user,
+                id__in=all_doc_ids_from_fuseki,     
+                tags__tag_name__iexact=tag_name   
+            ).values_list('id', flat=True))
+        else:
+            # 태그 필터가 없으면 모든 ID 사용
+            doc_ids_with_tag = all_doc_ids_from_fuseki
+
+        # 4. (RDB) '최종 필터링된' ID로만 문서 상세 정보 가져오기
+        # (예: {42, 44}만 조회)
+        doc_details_map = self._get_documents_from_rdb(doc_ids_with_tag)
+        
+        # 5. (BE) 데이터 최종 조립
+        category_doc_map = defaultdict(list)
+        category_counts_map = Counter() 
+
+        for res in sparql_results:
+            doc_id = int(res["doc_id"]["value"])
+            
+            # 이 doc_id가 '태그 필터'에서 살아남았는지 확인
+            if doc_id in doc_ids_with_tag: 
+                category_uri = res["category_uri"]["value"].replace(self.SCHEMA_URI, "sseukssak:") 
+                
+                if doc_id in doc_details_map: # (항상 True여야 함)
+                    category_doc_map[category_uri].append(doc_details_map[doc_id])
+                    category_counts_map[category_uri] += 1
+        
+        # 6. (BE) 방사형 그래프 및 카테고리 목록 생성 (수정 없음)
+        # (이미 필터링된 category_counts_map을 사용하므로 그래프도 자동 필터링됨)
+        radar_chart_data = []
+        categorized_docs_list = []
+        
+        current_template_categories = {}
+        if mode == 'hobby':
+            current_template_categories = {
+                "sseukssak:HobbyMainJob": "본업", "sseukssak:HobbyLeisure": "여가",
+                "sseukssak:HobbyTravel": "여행", "sseukssak:HobbyCreation": "창작",
+                "sseukssak:Other": "기타"
+            }
+        else:
+             prefix = template_uri_str.split(':')[-1].replace('Template', '')[:3]
+             current_template_categories = {
+                uri: label for uri, label in self.CATEGORY_LABELS.items() 
+                if uri.startswith(f"sseukssak:{prefix}")
+             }
+
+        for category_uri, category_name in current_template_categories.items():
+            docs = category_doc_map.get(category_uri, [])
+            docs.sort(key=lambda x: x['updated_at'], reverse=True) 
+            count = len(docs)
+            
+            radar_chart_data.append({"axis": category_uri, "label": category_name, "value": count})
+            categorized_docs_list.append({
+                "category_label": category_name, "category_uri": category_uri,
+                "count": count, "documents": docs
+            })
+
+        # 7. 최종 JSON 응답
+        response_data = {
+            "current_mode": mode,
+            "user_job_template": user_job_template,
+            "current_tag_filter": tag_name, 
+            "radar_chart_data": radar_chart_data,
+            "categorized_docs": categorized_docs_list
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+    
+    

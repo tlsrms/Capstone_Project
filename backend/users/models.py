@@ -40,9 +40,16 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)   # 활성 사용자 여부 (로그인 가능 여부)
     date_joined = models.DateTimeField(default=timezone.now) # 가입일
 
+    # 2.5 티켓을 위한 '직업 템플릿' 필드
+    job_template = models.CharField(
+        max_length=50, 
+        blank=True, 
+        default='default' # 기본값 '일반'
+    )
+
     # 이 모델을 관리할 '매니저'를 위에서 만든 CustomUserManager로 지정
     objects = CustomUserManager()
-
+    
     # '아이디'로 사용할 필드를 'email'로 지정 (가장 중요!)
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = [] # (슈퍼유저 만들 때 email 외에 추가로 물어볼 필드, 지금은 없음)

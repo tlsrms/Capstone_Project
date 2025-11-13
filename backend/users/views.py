@@ -50,7 +50,21 @@ class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
+        # 수정된 UserSerializer 사용
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    # PATCH 요청으로 사용자 정보(job_template) 업데이트
+    def patch(self, request):
+        user = request.user
+        # partial=True: 'job_template' 필드만 부분적으로 수정 허용
+        serializer = UserSerializer(user, data=request.data, partial=True)
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class GoogleLoginView(APIView):

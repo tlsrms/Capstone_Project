@@ -1,0 +1,131 @@
+PREFIX sseukssak: <http://api.sseukssak.com/ontology#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+INSERT DATA {
+    # --- 템플릿 최상위 부모 정의 ---
+    sseukssak:DeveloperTemplate rdfs:subClassOf sseukssak:WorkTemplate .
+    sseukssak:StudentTemplate rdfs:subClassOf sseukssak:WorkTemplate .
+    sseukssak:OfficeWorkerTemplate rdfs:subClassOf sseukssak:WorkTemplate .
+    sseukssak:DefaultTemplate rdfs:subClassOf sseukssak:WorkTemplate .
+    sseukssak:HobbyMainJob rdfs:subClassOf sseukssak:HobbyTemplate .
+    sseukssak:HobbyLeisure rdfs:subClassOf sseukssak:HobbyTemplate .
+    sseukssak:HobbyTravel rdfs:subClassOf sseukssak:HobbyTemplate .
+    sseukssak:HobbyCreation rdfs:subClassOf sseukssak:HobbyTemplate .
+
+    # --- 1. 개발자 (Developer) 템플릿 규칙 ---
+    sseukssak:DevPlanning rdfs:subClassOf sseukssak:DeveloperTemplate .
+    sseukssak:DevDevelopment rdfs:subClassOf sseukssak:DeveloperTemplate .
+    sseukssak:DevDeployment rdfs:subClassOf sseukssak:DeveloperTemplate .
+    sseukssak:DevDebugging rdfs:subClassOf sseukssak:DeveloperTemplate .
+    sseukssak:DevCollaboration rdfs:subClassOf sseukssak:DeveloperTemplate .
+    sseukssak:DevLearning rdfs:subClassOf sseukssak:DeveloperTemplate .
+    sseukssak:PlanningDocument rdfs:subClassOf sseukssak:DevPlanning .
+    sseukssak:Schedule rdfs:subClassOf sseukssak:DevPlanning .
+    sseukssak:ResearchMaterial rdfs:subClassOf sseukssak:DevPlanning .
+    sseukssak:AnalysisResult rdfs:subClassOf sseukssak:DevPlanning .
+    sseukssak:Report rdfs:subClassOf sseukssak:DevPlanning .
+    sseukssak:SourceCode rdfs:subClassOf sseukssak:DevDevelopment .
+    sseukssak:Draft rdfs:subClassOf sseukssak:DevDevelopment .
+    sseukssak:BuildFile rdfs:subClassOf sseukssak:DevDeployment .
+    sseukssak:ManagementDocument rdfs:subClassOf sseukssak:DevDeployment .
+    sseukssak:DebuggingMaterial rdfs:subClassOf sseukssak:DevDebugging .
+    sseukssak:LogDocument rdfs:subClassOf sseukssak:DevDebugging .
+    sseukssak:DeveloperCollaborationLog rdfs:subClassOf sseukssak:DevCollaboration .
+    sseukssak:CommunicationDocument rdfs:subClassOf sseukssak:DevCollaboration .
+    sseukssak:PresentationMaterial rdfs:subClassOf sseukssak:DevCollaboration .
+    sseukssak:StudyNote rdfs:subClassOf sseukssak:DevLearning .
+    sseukssak:Summary rdfs:subClassOf sseukssak:DevLearning .
+    sseukssak:ProblemSolvingMaterial rdfs:subClassOf sseukssak:DevLearning .
+
+    # --- 2. 학생 (Student) 템플릿 규칙 ---
+    sseukssak:StuLearning rdfs:subClassOf sseukssak:StudentTemplate .
+    sseukssak:StuResearch rdfs:subClassOf sseukssak:StudentTemplate .
+    sseukssak:StuAssignment rdfs:subClassOf sseukssak:StudentTemplate .
+    sseukssak:StuCollaboration rdfs:subClassOf sseukssak:StudentTemplate .
+    sseukssak:StuSchedule rdfs:subClassOf sseukssak:StudentTemplate .
+    sseukssak:StudyNote rdfs:subClassOf sseukssak:StuLearning .
+    sseukssak:Summary rdfs:subClassOf sseukssak:StuLearning .
+    sseukssak:ProblemSolvingMaterial rdfs:subClassOf sseukssak:StuLearning .
+    sseukssak:ResearchMaterial rdfs:subClassOf sseukssak:StuResearch .
+    sseukssak:AnalysisResult rdfs:subClassOf sseukssak:StuResearch .
+    sseukssak:ResearchPaper rdfs:subClassOf sseukssak:StuResearch .
+    sseukssak:LogDocument rdfs:subClassOf sseukssak:StuResearch .
+    sseukssak:Report rdfs:subClassOf sseukssak:StuAssignment .
+    sseukssak:PresentationMaterial rdfs:subClassOf sseukssak:StuAssignment .
+    sseukssak:Draft rdfs:subClassOf sseukssak:StuAssignment .
+    sseukssak:PlanningDocument rdfs:subClassOf sseukssak:StuAssignment .
+    sseukssak:SourceCode rdfs:subClassOf sseukssak:StuAssignment .
+    sseukssak:BuildFile rdfs:subClassOf sseukssak:StuAssignment .
+    sseukssak:DebuggingMaterial rdfs:subClassOf sseukssak:StuAssignment .
+    sseukssak:StudentCollaboration rdfs:subClassOf sseukssak:StuCollaboration .
+    sseukssak:DeveloperCollaborationLog rdfs:subClassOf sseukssak:StuCollaboration .
+    sseukssak:CommunicationDocument rdfs:subClassOf sseukssak:StuCollaboration .
+    sseukssak:Schedule rdfs:subClassOf sseukssak:StuSchedule .
+
+    # --- 3. 회사원 (OfficeWorker) 템플릿 규칙 ---
+    sseukssak:OfficePlan rdfs:subClassOf sseukssak:OfficeWorkerTemplate .
+    sseukssak:OfficeCommunication rdfs:subClassOf sseukssak:OfficeWorkerTemplate .
+    sseukssak:OfficeWorkLogs rdfs:subClassOf sseukssak:OfficeWorkerTemplate .
+    sseukssak:OfficeInvestigation rdfs:subClassOf sseukssak:OfficeWorkerTemplate .
+    sseukssak:OfficeAdministration rdfs:subClassOf sseukssak:OfficeWorkerTemplate .
+    sseukssak:PlanningDocument rdfs:subClassOf sseukssak:OfficePlan .
+    sseukssak:Report rdfs:subClassOf sseukssak:OfficePlan .
+    sseukssak:Draft rdfs:subClassOf sseukssak:OfficePlan .
+    sseukssak:CommunicationDocument rdfs:subClassOf sseukssak:OfficeCommunication .
+    sseukssak:PresentationMaterial rdfs:subClassOf sseukssak:OfficeCommunication .
+    sseukssak:StudentCollaboration rdfs:subClassOf sseukssak:OfficeCommunication .
+    sseukssak:DeveloperCollaborationLog rdfs:subClassOf sseukssak:OfficeCommunication .
+    sseukssak:Schedule rdfs:subClassOf sseukssak:OfficeWorkLogs .
+    sseukssak:LogDocument rdfs:subClassOf sseukssak:OfficeWorkLogs .
+    sseukssak:ResearchMaterial rdfs:subClassOf sseukssak:OfficeInvestigation .
+    sseukssak:AnalysisResult rdfs:subClassOf sseukssak:OfficeInvestigation .
+    sseukssak:ResearchPaper rdfs:subClassOf sseukssak:OfficeInvestigation .
+    sseukssak:FinancialDocument rdfs:subClassOf sseukssak:OfficeAdministration .
+    sseukssak:LegalDocument rdfs:subClassOf sseukssak:OfficeAdministration .
+    sseukssak:HRDocument rdfs:subClassOf sseukssak:OfficeAdministration .
+    sseukssak:ManagementDocument rdfs:subClassOf sseukssak:OfficeAdministration .
+    sseukssak:MarketingMaterial rdfs:subClassOf sseukssak:OfficeAdministration .
+
+    # --- 4. 일반 (Default) 템플릿 규칙 ---
+    sseukssak:DefaultSchedule rdfs:subClassOf sseukssak:DefaultTemplate .
+    sseukssak:DefaultReports rdfs:subClassOf sseukssak:DefaultTemplate .
+    sseukssak:DefaultData rdfs:subClassOf sseukssak:DefaultTemplate .
+    sseukssak:DefaultEducation rdfs:subClassOf sseukssak:DefaultTemplate .
+    sseukssak:DefaultExternal rdfs:subClassOf sseukssak:DefaultTemplate .
+    sseukssak:Schedule rdfs:subClassOf sseukssak:DefaultSchedule .
+    sseukssak:PlanningDocument rdfs:subClassOf sseukssak:DefaultReports .
+    sseukssak:Report rdfs:subClassOf sseukssak:DefaultReports .
+    sseukssak:Draft rdfs:subClassOf sseukssak:DefaultReports .
+    sseukssak:PresentationMaterial rdfs:subClassOf sseukssak:DefaultReports .
+    sseukssak:CommunicationDocument rdfs:subClassOf sseukssak:DefaultReports .
+    sseukssak:DeveloperCollaborationLog rdfs:subClassOf sseukssak:DefaultReports .
+    sseukssak:ResearchMaterial rdfs:subClassOf sseukssak:DefaultData .
+    sseukssak:AnalysisResult rdfs:subClassOf sseukssak:DefaultData .
+    sseukssak:LogDocument rdfs:subClassOf sseukssak:DefaultData .
+    sseukssak:ManagementDocument rdfs:subClassOf sseukssak:DefaultData .
+    sseukssak:StudyNote rdfs:subClassOf sseukssak:DefaultEducation .
+    sseukssak:ProblemSolvingMaterial rdfs:subClassOf sseukssak:DefaultEducation .
+    sseukssak:Summary rdfs:subClassOf sseukssak:DefaultEducation .
+    sseukssak:StudentCollaboration rdfs:subClassOf sseukssak:DefaultEducation .
+    sseukssak:ResearchPaper rdfs:subClassOf sseukssak:DefaultEducation .
+    sseukssak:FinancialDocument rdfs:subClassOf sseukssak:DefaultExternal .
+    sseukssak:LegalDocument rdfs:subClassOf sseukssak:DefaultExternal .
+    sseukssak:HRDocument rdfs:subClassOf sseukssak:DefaultExternal .
+    sseukssak:MarketingMaterial rdfs:subClassOf sseukssak:DefaultExternal .
+    
+    # --- 5. 취미 (Hobby) 템플릿 규칙 ---
+    # (HobbyMainJob은 '규칙'이 아니라 '축'의 이름으로만 사용됨)
+    sseukssak:MovieDrama rdfs:subClassOf sseukssak:HobbyLeisure .
+    sseukssak:Reading rdfs:subClassOf sseukssak:HobbyLeisure .
+    sseukssak:Music rdfs:subClassOf sseukssak:HobbyLeisure .
+    sseukssak:Game rdfs:subClassOf sseukssak:HobbyLeisure .
+    sseukssak:Exercise rdfs:subClassOf sseukssak:HobbyLeisure .
+    sseukssak:Pet rdfs:subClassOf sseukssak:HobbyLeisure .
+    sseukssak:TravelLog rdfs:subClassOf sseukssak:HobbyTravel .
+    sseukssak:TravelPhoto rdfs:subClassOf sseukssak:HobbyTravel .
+    sseukssak:TravelPlan rdfs:subClassOf sseukssak:HobbyTravel .
+    sseukssak:Blog rdfs:subClassOf sseukssak:HobbyCreation .
+    sseukssak:Writing rdfs:subClassOf sseukssak:HobbyCreation .
+    sseukssak:Drawing rdfs:subClassOf sseukssak:HobbyCreation .
+    sseukssak:Diary rdfs:subClassOf sseukssak:HobbyCreation .
+}
