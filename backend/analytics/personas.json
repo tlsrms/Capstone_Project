@@ -1,0 +1,22 @@
+{
+  "personas": [
+    {
+      "id": "scholarship.top_student",
+      "label": "장학금 면제생",
+      "weights": {
+        "sseukssak:StuLearning": 0.3,
+        "sseukssak:StuAssignment": 0.3,
+        "sseukssak:StuResearch": 0.2
+      }
+    },
+    {
+      "id": "dev.heavy_coder",
+      "label": "헤비 개발자",
+      "weights": {
+        "sseukssak:DevDevelopment": 0.4,
+        "sseukssak:DevDebugging": 0.3,
+        "sseukssak:DevLearning": 0.2
+      }
+    }
+  ]
+}
