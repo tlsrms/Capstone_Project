@@ -25,5 +25,21 @@ class DocumentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TextDocument
-        fields = ['id', 'author_email', 'title', 'content', 'tags', 'created_at', 'updated_at', 'summary']
-        read_only_fields = ['id', 'author_email', 'created_at', 'updated_at', 'tags', 'summary']
+        fields = [
+            'id', 'author_email', 'title', 'content', 
+            'file_path',
+            'tags', 
+            'created_at', 'updated_at', 
+            'summary'
+        ]
+        
+        # read_only_fields에서 'file_path' 제거
+        read_only_fields = [
+            'id', 'author_email', 'created_at', 'updated_at', 'tags',
+            'summary'
+        ]
+        
+        # 'file_path'는 쓰기(POST/PATCH)는 가능하지만, 필수는 아님
+        extra_kwargs = {
+            'file_path': {'required': False, 'allow_blank': True}
+        }

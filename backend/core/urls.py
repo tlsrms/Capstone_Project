@@ -34,4 +34,10 @@ urlpatterns = [
         views.OrganizeView.as_view(), 
         name='document-organize'
     ),
+
+    path(
+        'neatness-score/', 
+        views.NeatnessScoreView.as_view(), 
+        name='neatness-score'
+    ),
 ]

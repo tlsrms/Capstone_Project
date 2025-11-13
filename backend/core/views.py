@@ -11,6 +11,11 @@ from django.shortcuts import get_object_or_404
 from .models import TextDocument, Tag
 from .serializers import DocumentSerializer, TagSerializer
 
+import os 
+from django.db.models import Q
+from analytics.metrics import compute_cleanliness 
+from analytics.utils import calculate_fragmentation 
+
 class DocumentViewSet(viewsets.ModelViewSet): 
     """
     문서(TextDocument)에 대한 CRUD API를 처리하는 뷰셋
@@ -350,4 +355,83 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
         return Response(
             {"message": f"Organization complete for {organized_count} out of {doc_count} new documents."},
             status=status.HTTP_202_ACCEPTED
+        )
+    
+# ---------------------------------------------------
+# 2.4 BE: 깔끔지수 계산 API 뷰 
+# ---------------------------------------------------
+class NeatnessScoreView(APIView):
+    """
+    "깔끔지수" 계산
+    GET /api/neatness-score/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # 1. RDB에서 사용자의 모든 문서 정보(RDB) 가져오기
+        user_docs = TextDocument.objects.filter(author=user, file_path__isnull=False).exclude(file_path="")
+        total_files = user_docs.count()
+
+        if total_files == 0:
+            return Response({"score": 0.0, "details": {}}, status=status.HTTP_200_OK)
+
+        # 2. BE가 RDB 기반으로 3대 지표 계산
+        meaningless_count = 0 # R_title
+        too_shallow_count = 0 # R_shallow
+        too_deep_count = 0    # R_deep
+
+        # A) R_title (무의미 제목)
+        meaningless_count = user_docs.filter(
+                    Q(title__exact="") |                 # 1. 제목이 아예 없음
+                    Q(title__icontains="제목 없음") |     # 2. "제목 없음"
+                    Q(title__icontains="Untitled") |      # 3. "Untitled" (기존)
+                    Q(title__icontains="untitled") |      # 4. "untitled" (신규)
+                    Q(title__icontains="document") |      # 5. "document" (신규)
+                    Q(title__icontains="새 문서")         # 6. "새 문서" (신규)
+                ).count()
+        
+        for doc in user_docs.only("file_path"):
+            try:
+                path_str = os.path.normpath(doc.file_path)
+                dir_str = os.path.dirname(path_str) # "C:\Users\Me"
+                
+                # (예) "C:\" -> ["C:"] -> len=1 -> depth=0
+                # (예) "C:\Users" -> ["C:", "Users"] -> len=2 -> depth=1
+                depth = len(dir_str.rstrip(os.sep).split(os.sep)) - 1 
+                
+                if depth <= 1: # 논문 정의
+                    too_shallow_count += 1
+                elif depth >= 5: # 논문 정의 (C:\a\b\c\d\e\file.txt -> dir_depth=5)
+                    too_deep_count += 1
+            except Exception:
+                pass
+
+        # 3. B) BE가 (RDB + Fuseki) 기반으로 R_frag 지표 계산
+        # (이 함수는 RDB의 file_path와 Fuseki의 hasType을 둘 다 사용)
+        fragmented_count = calculate_fragmentation(user) 
+
+        # 4. (analytics) 팀원이 만든 함수로 4개 지표를 합산
+        score = compute_cleanliness(
+            total_files=total_files,
+            meaningless_count=meaningless_count,
+            fragmented_count=fragmented_count,
+            too_shallow_count=too_shallow_count,
+            too_deep_count=too_deep_count
+        )
+        
+        return Response(
+            {
+                "score": round(score, 2),
+                "details": {
+                    "total_files": total_files,
+                    "meaningless_count": meaningless_count,
+                    "fragmented_count": fragmented_count,
+                    "too_shallow_count": too_shallow_count,
+                    "too_deep_count": too_deep_count,
+                }
+            },
+            status=status.HTTP_200_OK
         )
