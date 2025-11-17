@@ -1,6 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from .views import PersonaAnalysisView  # 위치에 맞게 import
 
 router = DefaultRouter()
 
@@ -47,4 +48,8 @@ urlpatterns = [
         views.DashboardView.as_view(), 
         name='dashboard'
     ),
+]
+
+urlpatterns += [
+    path("persona/", PersonaAnalysisView.as_view(), name="persona-analysis"),
 ]
