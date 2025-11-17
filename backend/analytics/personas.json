@@ -2,7 +2,7 @@
   "personas": [
     {
       "id": "scholarship.top_student",
-      "label": "장학금 면제생",
+      "label": "등록금 면제생",
       "weights": {
         "sseukssak:StuLearning": 0.3,
         "sseukssak:StuAssignment": 0.3,
@@ -16,6 +16,173 @@
         "sseukssak:DevDevelopment": 0.4,
         "sseukssak:DevDebugging": 0.3,
         "sseukssak:DevLearning": 0.2
+      }
+    },
+
+    {
+      "id": "dev.architect_mind",
+      "label": "아키텍처형 개발자",
+      "weights": {
+        "sseukssak:DevPlanning": 0.4,
+        "sseukssak:DevDeployment": 0.3,
+        "sseukssak:DevCollaboration": 0.2
+      }
+    },
+    {
+      "id": "dev.research_engineer",
+      "label": "탐구형 개발자",
+      "weights": {
+        "sseukssak:DevLearning": 0.4,
+        "sseukssak:DevDebugging": 0.3,
+        "sseukssak:DevDevelopment": 0.2
+      }
+    },
+    {
+      "id": "dev.team_player",
+      "label": "협업 중심 개발자",
+      "weights": {
+        "sseukssak:DevCollaboration": 0.5,
+        "sseukssak:DevPlanning": 0.3
+      }
+    },
+    {
+      "id": "dev.production_master",
+      "label": "운영 최적화 개발자",
+      "weights": {
+        "sseukssak:DevDeployment": 0.5,
+        "sseukssak:DevDebugging": 0.3
+      }
+    },
+
+    {
+      "id": "stu.self_learner",
+      "label": "자기주도 학습가",
+      "weights": {
+        "sseukssak:StuLearning": 0.6,
+        "sseukssak:StuResearch": 0.2
+      }
+    },
+    {
+      "id": "stu.assignment_warrior",
+      "label": "과제 전사",
+      "weights": {
+        "sseukssak:StuAssignment": 0.6,
+        "sseukssak:StuSchedule": 0.2
+      }
+    },
+    {
+      "id": "stu.collab_student",
+      "label": "협업 중심 학생",
+      "weights": {
+        "sseukssak:StuCollaboration": 0.5,
+        "sseukssak:StuLearning": 0.3
+      }
+    },
+    {
+      "id": "stu.researcher_academic",
+      "label": "학문 탐구형",
+      "weights": {
+        "sseukssak:StuResearch": 0.6,
+        "sseukssak:StuAssignment": 0.2
+      }
+    },
+
+    {
+      "id": "office.project_manager",
+      "label": "PM형 직장인",
+      "weights": {
+        "sseukssak:OfficePlan": 0.5,
+        "sseukssak:OfficeAdministration": 0.3
+      }
+    },
+    {
+      "id": "office.report_master",
+      "label": "문서의 신",
+      "weights": {
+        "sseukssak:OfficeWorkLogs": 0.4,
+        "sseukssak:OfficeCommunication": 0.3,
+        "sseukssak:DefaultReports": 0.2
+      }
+    },
+    {
+      "id": "office.comm_specialist",
+      "label": "소통 전문가",
+      "weights": {
+        "sseukssak:OfficeCommunication": 0.6,
+        "sseukssak:OfficePlan": 0.2
+      }
+    },
+    {
+      "id": "office.investigator",
+      "label": "탐색형 직장인",
+      "weights": {
+        "sseukssak:OfficeInvestigation": 0.7,
+        "sseukssak:OfficeCommunication": 0.2
+      }
+    },
+
+    {
+      "id": "default.scheduler",
+      "label": "일정관리 마스터",
+      "weights": {
+        "sseukssak:DefaultSchedule": 0.6,
+        "sseukssak:DefaultData": 0.2
+      }
+    },
+    {
+      "id": "default.reporter",
+      "label": "보고서 수집가",
+      "weights": {
+        "sseukssak:DefaultReports": 0.7,
+        "sseukssak:DefaultData": 0.2
+      }
+    },
+    {
+      "id": "default.info_collector",
+      "label": "정보 수집가",
+      "weights": {
+        "sseukssak:DefaultData": 0.5,
+        "sseukssak:DefaultExternal": 0.3
+      }
+    },
+
+    {
+      "id": "hobby.explorer",
+      "label": "여행 탐험가",
+      "weights": {
+        "sseukssak:HobbyTravel": 0.7,
+        "sseukssak:HobbyLeisure": 0.2
+      }
+    },
+    {
+      "id": "hobby.creator",
+      "label": "창작자",
+      "weights": {
+        "sseukssak:HobbyCreation": 0.6,
+        "sseukssak:HobbyLeisure": 0.2
+      }
+    },
+    {
+      "id": "hobby.reviewer",
+      "label": "문화 감상자",
+      "weights": {
+        "sseukssak:HobbyLeisure": 0.7,
+        "sseukssak:HobbyCreation": 0.2
+      }
+    },
+    {
+      "id": "hobby.active_life",
+      "label": "액티브 라이프형",
+      "weights": {
+        "sseukssak:HobbyLeisure": 0.4,
+        "sseukssak:HobbyTravel": 0.4
+      }
+    },
+    {
+      "id": "hobby.animal_friendly",
+      "label": "반려 케어형",
+      "weights": {
+        "sseukssak:HobbyLeisure": 0.8
       }
     }
   ]
