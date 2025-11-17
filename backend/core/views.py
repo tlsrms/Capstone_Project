@@ -13,7 +13,8 @@ from .serializers import DocumentSerializer, TagSerializer
 
 import os 
 from django.db.models import Q
-from analytics.metrics import compute_cleanliness, calculate_fragmentation 
+from analytics.metrics import compute_cleanliness, calculate_fragmentation, build_category_distribution
+from analytics.personas import score_personas
 
 from collections import defaultdict, Counter 
 
@@ -705,4 +706,120 @@ class DashboardView(APIView):
         
         return Response(response_data, status=status.HTTP_200_OK)
     
+class PersonaAnalysisView(APIView):
+    """
+    [핵심 기능] 사용자 페르소나 분석
+    GET /api/persona/
     
+    - Fuseki의 온톨로지(문서 타입/카테고리)를 기반으로
+      사용자 문서 분포를 계산하고
+    - personas.json에 정의된 페르소나들과의 코사인 유사도를 계산하여
+      'MBTI 결과'처럼 가장 유사한 페르소나를 알려주는 API.
+      
+    LLM(ollama)은 사용하지 않고, 수학적 유사도만 사용합니다.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    # DashboardView와 동일 설정 재사용
+    SCHEMA_URI = DashboardView.SCHEMA_URI
+    FUSEKI_QUERY_ENDPOINT = DashboardView.FUSEKI_QUERY_ENDPOINT
+    WORK_TEMPLATE_CLASS = DashboardView.TEMPLATES_CLASSES["work_root"]  # "WorkTemplate"
+
+    def _execute_sparql_query(self, query: str) -> list:
+        """Fuseki에 SPARQL 쿼리를 보내고 bindings 리스트를 반환."""
+        try:
+            sparql = SPARQLWrapper(self.FUSEKI_QUERY_ENDPOINT)
+            sparql.setQuery(query)
+            sparql.setReturnFormat(JSON)
+            results = sparql.query().convert()
+            return results.get("results", {}).get("bindings", [])
+        except Exception as e:
+            print(f"[Fuseki Error] Persona SPARQL query failed: {e}")
+            return []
+
+    def _get_category_counts(self, user_id: int) -> dict:
+        """
+        Fuseki에서 로그인 사용자의 문서들을
+        '작업 카테고리(Dev/Stu/Office/Default/HobbyMainJob 등)' 기준으로 집계.
+
+        반환값 예:
+        {
+          "sseukssak:DevDevelopment": 10,
+          "sseukssak:StuLearning": 3,
+          ...
+        }
+        """
+        user_uri = f"{self.SCHEMA_URI}User_{user_id}"
+        work_root_uri = f"<{self.SCHEMA_URI}{self.WORK_TEMPLATE_CLASS}>"
+
+        query = f"""
+        PREFIX sseukssak: <{self.SCHEMA_URI}>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        SELECT ?category_uri (COUNT(?doc) AS ?count)
+        WHERE {{
+            ?doc sseukssak:hasOwner <{user_uri}> ;
+                 sseukssak:hasType ?type .
+            ?type rdfs:subClassOf* ?category_uri .
+            ?category_uri rdfs:subClassOf {work_root_uri} .
+        }}
+        GROUP BY ?category_uri
+        """
+
+        bindings = self._execute_sparql_query(query)
+        category_counts: dict = {}
+
+        for b in bindings:
+            category_uri_full = b["category_uri"]["value"]  # 예: http://api.sseukssak.com/ontology#DevDevelopment
+            count = int(b["count"]["value"])
+
+            # prefix 형태로 변환: sseukssak:DevDevelopment
+            if category_uri_full.startswith(self.SCHEMA_URI):
+                local = category_uri_full[len(self.SCHEMA_URI):]
+                key = f"sseukssak:{local}"
+            else:
+                key = category_uri_full
+
+            category_counts[key] = category_counts.get(key, 0) + count
+
+        return category_counts
+
+    def get(self, request):
+        user = request.user
+
+        # 1) Fuseki에서 카테고리별 문서 수 집계
+        category_counts = self._get_category_counts(user.id)
+
+        if not category_counts:
+            # 아직 온톨로지에 저장된 문서가 없다면
+            return Response(
+                {
+                    "message": "사용자 문서에 대한 온톨로지 정보가 충분하지 않아 페르소나를 계산할 수 없습니다.",
+                    "category_distribution": {},
+                    "personas": [],
+                    "top_persona": None,
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # 2) 카테고리 분포(0~1) 계산
+        category_dist = build_category_distribution(category_counts)
+        # 예: {"sseukssak:DevDevelopment": 0.5, "sseukssak:StuLearning": 0.3, ...}
+
+        # 3) 페르소나 유사도 계산
+        persona_scores = score_personas(category_dist)
+        # 예: [{"id":"dev.heavy_coder","label":"헤비 개발자","score":0.873}, ...]
+
+        top_persona = persona_scores[0] if persona_scores else None
+
+        # 4) 응답 생성
+        return Response(
+            {
+                "category_distribution": category_dist,
+                "personas": persona_scores,  # 모든 페르소나 + 점수
+                "top_persona": top_persona,  # 가장 유사한 페르소나 하나
+            },
+            status=status.HTTP_200_OK,
+        )
