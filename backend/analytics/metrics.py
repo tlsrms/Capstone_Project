@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import Dict, List
 import os
-from collections import Counter
 from collections import Counter, defaultdict
 from core.models import TextDocument
 from users.models import CustomUser
@@ -119,3 +118,20 @@ def calculate_fragmentation(user: CustomUser) -> (int, set):
                 fragmented_doc_ids.add(doc_id)
 
     return total_fragmented_count, fragmented_doc_ids 
+
+def build_category_distribution(category_counts: Dict[str, int]) -> Dict[str, float]:
+    """
+    buckets를 기반으로 0~1 사이의 비율 분포 생성.
+    페르소나 유사도 계산 등에 사용.
+
+    예)
+      {"A": 10, "B": 30}  ->  {"A": 0.25, "B": 0.75}
+    """
+    total = sum(category_counts.values())
+    if total <= 0:
+        return {}
+    return {
+        cat: count / total
+        for cat, count in category_counts.items()
+        if count > 0
+    }
