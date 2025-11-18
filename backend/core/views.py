@@ -726,6 +726,24 @@ class PersonaAnalysisView(APIView):
     FUSEKI_QUERY_ENDPOINT = DashboardView.FUSEKI_QUERY_ENDPOINT
     WORK_TEMPLATE_CLASS = DashboardView.TEMPLATES_CLASSES["work_root"]  # "WorkTemplate"
 
+    # 직업군별 카테고리 IRI prefix 매핑
+    JOB_CATEGORY_PREFIXES = {
+        "developer": ("sseukssak:Dev",),
+        "student": ("sseukssak:Stu",),
+        "office_worker": ("sseukssak:Office",),
+        "default": ("sseukssak:Default",),
+        "hobby": ("sseukssak:Hobby",),
+    }
+
+    # 직업군별 페르소나 id prefix 매핑
+    JOB_PERSONA_PREFIXES = {
+        "developer": ("dev.",),
+        "student": ("stu.", "scholarship."),  # 장학금 페르소나는 학생 계열
+        "office_worker": ("office.",),
+        "default": ("default.",),
+        "hobby": ("hobby.",),
+    }
+
     def _execute_sparql_query(self, query: str) -> list:
         """Fuseki에 SPARQL 쿼리를 보내고 bindings 리스트를 반환."""
         try:
@@ -789,11 +807,10 @@ class PersonaAnalysisView(APIView):
     def get(self, request):
         user = request.user
 
-        # 1) Fuseki에서 카테고리별 문서 수 집계
-        category_counts = self._get_category_counts(user.id)
+        # 1) Fuseki에서 카테고리별 문서 수 집계 (전체)
+        raw_category_counts = self._get_category_counts(user.id)
 
-        if not category_counts:
-            # 아직 온톨로지에 저장된 문서가 없다면
+        if not raw_category_counts:
             return Response(
                 {
                     "message": "사용자 문서에 대한 온톨로지 정보가 충분하지 않아 페르소나를 계산할 수 없습니다.",
@@ -804,22 +821,57 @@ class PersonaAnalysisView(APIView):
                 status=status.HTTP_200_OK,
             )
 
-        # 2) 카테고리 분포(0~1) 계산
-        category_dist = build_category_distribution(category_counts)
-        # 예: {"sseukssak:DevDevelopment": 0.5, "sseukssak:StuLearning": 0.3, ...}
+        # 2) 유저 직업군 가져오기 (없으면 default로 처리)
+        job_template = getattr(user, "job_template", None) or "default"
 
-        # 3) 페르소나 유사도 계산
-        persona_scores = score_personas(category_dist)
-        # 예: [{"id":"dev.heavy_coder","label":"헤비 개발자","score":0.873}, ...]
+        # 2-1) 직업군별 카테고리 prefix 결정
+        category_prefixes = self.JOB_CATEGORY_PREFIXES.get(job_template, ())
+
+        # 2-2) 해당 prefix로 카테고리 필터링
+        if category_prefixes:
+            category_counts = {
+                iri: cnt
+                for iri, cnt in raw_category_counts.items()
+                if any(iri.startswith(prefix) for prefix in category_prefixes)
+            }
+        else:
+            category_counts = raw_category_counts
+
+        # 혹시 필터링을 했더니 완전히 비어버리면, 일단 전체를 쓰도록 graceful fallback
+        if not category_counts:
+            category_counts = raw_category_counts
+
+        # 3) 카테고리 분포(0~1) 계산
+        category_dist = build_category_distribution(category_counts)
+
+        # 4) 페르소나 유사도 계산 (전체 퍼소나 대상)
+        all_personas = score_personas(category_dist)
+
+        # 5) 직업군별로 "해당되는 퍼소나만" 필터링
+        persona_prefixes = self.JOB_PERSONA_PREFIXES.get(job_template, ())
+        if persona_prefixes:
+            filtered_personas = [
+                p for p in all_personas
+                if any(p["id"].startswith(pref) for pref in persona_prefixes)
+            ]
+        else:
+            filtered_personas = all_personas
+
+        # 마찬가지로, 필터링 후 아무것도 없으면 전체 리스트로 fallback
+        if filtered_personas:
+            persona_scores = filtered_personas
+        else:
+            persona_scores = all_personas
 
         top_persona = persona_scores[0] if persona_scores else None
 
-        # 4) 응답 생성
+        # 6) 응답 생성
         return Response(
             {
-                "category_distribution": category_dist,
-                "personas": persona_scores,  # 모든 페르소나 + 점수
-                "top_persona": top_persona,  # 가장 유사한 페르소나 하나
+                "job_template": job_template,
+                "category_distribution": category_dist,  # 이미 직업군 필터 후 분포
+                "personas": persona_scores,             # 직업군에 맞는 후보들
+                "top_persona": top_persona,             # 그 중 최고점
             },
             status=status.HTTP_200_OK,
         )
