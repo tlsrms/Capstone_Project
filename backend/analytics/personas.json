@@ -2,7 +2,10 @@
   "personas": [
     {
       "id": "scholarship.top_student",
-      "label": "등록금 면제생",
+      "label": "장학금 면제생",
+      "description": "학습, 과제, 연구 등 모든 분야를 균형 있게 챙기는 육각형 인재입니다.",
+      "target_template": "student",
+      "keywords": ["학업 연계력", "완벽한 밸런스", "성실함의 정석"],
       "weights": {
         "sseukssak:StuLearning": 0.3,
         "sseukssak:StuAssignment": 0.3,
@@ -10,18 +13,67 @@
       }
     },
     {
+      "id": "stu.self_learner",
+      "label": "자기주도 학습가",
+      "description": "누가 시키지 않아도 스스로 학습 계획을 세우고 깊이 있게 탐구합니다.",
+      "target_template": "student",
+      "keywords": ["자기주도력", "지식 탐구심", "능동적 학습"],
+      "weights": {
+        "sseukssak:StuLearning": 0.6,
+        "sseukssak:StuResearch": 0.2
+      }
+    },
+    {
+      "id": "stu.assignment_warrior",
+      "label": "과제 전사",
+      "description": "쏟아지는 과제 속에서도 마감 기한을 절대 놓치지 않는 생존가입니다.",
+      "target_template": "student",
+      "keywords": ["과제 격파력", "마감 준수력", "목표 달성"],
+      "weights": {
+        "sseukssak:StuAssignment": 0.6,
+        "sseukssak:StuSchedule": 0.2
+      }
+    },
+    {
+      "id": "stu.collab_student",
+      "label": "협업 중심 학생",
+      "description": "팀 프로젝트와 스터디 활동에서 빛을 발하는 소통형 인재입니다.",
+      "target_template": "student",
+      "keywords": ["팀워크 시너지", "소통 능력", "공동체 의식"],
+      "weights": {
+        "sseukssak:StuCollaboration": 0.5,
+        "sseukssak:StuLearning": 0.3
+      }
+    },
+    {
+      "id": "stu.researcher_academic",
+      "label": "학문 탐구형",
+      "description": "깊이 있는 자료 조사와 분석을 즐기는 예비 석학입니다.",
+      "target_template": "student",
+      "keywords": ["논리적 사고", "심층 분석력", "학술적 깊이"],
+      "weights": {
+        "sseukssak:StuResearch": 0.6,
+        "sseukssak:StuAssignment": 0.2
+      }
+    },
+    {
       "id": "dev.heavy_coder",
       "label": "헤비 개발자",
+      "description": "하루 종일 코드를 짜고 디버깅하는 것에 몰입하는 순수 개발자입니다.",
+      "target_template": "developer",
+      "keywords": ["코딩 몰입도", "구현 집착력", "디버깅 본능"],
       "weights": {
         "sseukssak:DevDevelopment": 0.4,
         "sseukssak:DevDebugging": 0.3,
         "sseukssak:DevLearning": 0.2
       }
     },
-
     {
       "id": "dev.architect_mind",
       "label": "아키텍처형 개발자",
+      "description": "코드 작성보다 전체 구조 설계와 배포 환경 구축을 중요시합니다.",
+      "target_template": "developer",
+      "keywords": ["구조 설계력", "큰 그림", "시스템 최적화"],
       "weights": {
         "sseukssak:DevPlanning": 0.4,
         "sseukssak:DevDeployment": 0.3,
@@ -31,6 +83,9 @@
     {
       "id": "dev.research_engineer",
       "label": "탐구형 개발자",
+      "description": "새로운 기술을 학습하고 원리를 파헤치는 것을 즐깁니다.",
+      "target_template": "developer",
+      "keywords": ["신기술 습득", "원리 파악", "기술적 깊이"],
       "weights": {
         "sseukssak:DevLearning": 0.4,
         "sseukssak:DevDebugging": 0.3,
@@ -40,6 +95,9 @@
     {
       "id": "dev.team_player",
       "label": "협업 중심 개발자",
+      "description": "코드 리뷰와 문서화를 통해 팀 전체의 성장을 도모합니다.",
+      "target_template": "developer",
+      "keywords": ["지식 공유", "함께 성장", "코드 리뷰"],
       "weights": {
         "sseukssak:DevCollaboration": 0.5,
         "sseukssak:DevPlanning": 0.3
@@ -48,48 +106,20 @@
     {
       "id": "dev.production_master",
       "label": "운영 최적화 개발자",
+      "description": "안정적인 서비스 배포와 운영 이슈 해결에 강점이 있습니다.",
+      "target_template": "developer",
+      "keywords": ["서비스 안정성", "배포 자동화", "실전 지향"],
       "weights": {
         "sseukssak:DevDeployment": 0.5,
         "sseukssak:DevDebugging": 0.3
       }
     },
-
-    {
-      "id": "stu.self_learner",
-      "label": "자기주도 학습가",
-      "weights": {
-        "sseukssak:StuLearning": 0.6,
-        "sseukssak:StuResearch": 0.2
-      }
-    },
-    {
-      "id": "stu.assignment_warrior",
-      "label": "과제 전사",
-      "weights": {
-        "sseukssak:StuAssignment": 0.6,
-        "sseukssak:StuSchedule": 0.2
-      }
-    },
-    {
-      "id": "stu.collab_student",
-      "label": "협업 중심 학생",
-      "weights": {
-        "sseukssak:StuCollaboration": 0.5,
-        "sseukssak:StuLearning": 0.3
-      }
-    },
-    {
-      "id": "stu.researcher_academic",
-      "label": "학문 탐구형",
-      "weights": {
-        "sseukssak:StuResearch": 0.6,
-        "sseukssak:StuAssignment": 0.2
-      }
-    },
-
     {
       "id": "office.project_manager",
       "label": "PM형 직장인",
+      "description": "프로젝트의 계획 수립부터 일정 관리까지 전체를 조율합니다.",
+      "target_template": "office_worker",
+      "keywords": ["일정 조율", "리스크 관리", "리더십"],
       "weights": {
         "sseukssak:OfficePlan": 0.5,
         "sseukssak:OfficeAdministration": 0.3
@@ -98,6 +128,9 @@
     {
       "id": "office.report_master",
       "label": "문서의 신",
+      "description": "깔끔하고 논리적인 보고서 작성으로 업무를 증명합니다.",
+      "target_template": "office_worker",
+      "keywords": ["문서 정리력", "논리 정연", "핵심 요약"],
       "weights": {
         "sseukssak:OfficeWorkLogs": 0.4,
         "sseukssak:OfficeCommunication": 0.3,
@@ -107,6 +140,9 @@
     {
       "id": "office.comm_specialist",
       "label": "소통 전문가",
+      "description": "원활한 커뮤니케이션으로 부서 간의 협업을 이끌어냅니다.",
+      "target_template": "office_worker",
+      "keywords": ["의견 조율", "명확한 전달", "네트워킹"],
       "weights": {
         "sseukssak:OfficeCommunication": 0.6,
         "sseukssak:OfficePlan": 0.2
@@ -115,15 +151,20 @@
     {
       "id": "office.investigator",
       "label": "탐색형 직장인",
+      "description": "자료 조사와 시장 분석을 통해 인사이트를 도출합니다.",
+      "target_template": "office_worker",
+      "keywords": ["자료 수집", "트렌드 파악", "인사이트"],
       "weights": {
         "sseukssak:OfficeInvestigation": 0.7,
         "sseukssak:OfficeCommunication": 0.2
       }
     },
-
     {
       "id": "default.scheduler",
       "label": "일정관리 마스터",
+      "description": "철저한 시간 관리와 계획 준수로 하루를 알차게 보냅니다.",
+      "target_template": "default",
+      "keywords": ["시간 관리", "계획 준수", "꼼꼼함"],
       "weights": {
         "sseukssak:DefaultSchedule": 0.6,
         "sseukssak:DefaultData": 0.2
@@ -132,6 +173,9 @@
     {
       "id": "default.reporter",
       "label": "보고서 수집가",
+      "description": "모든 활동을 기록하고 보고서 형태로 남기는 습관이 있습니다.",
+      "target_template": "default",
+      "keywords": ["기록 습관", "정보 축적", "히스토리"],
       "weights": {
         "sseukssak:DefaultReports": 0.7,
         "sseukssak:DefaultData": 0.2
@@ -140,15 +184,20 @@
     {
       "id": "default.info_collector",
       "label": "정보 수집가",
+      "description": "다양한 분야의 자료를 수집하고 분류하는 것을 즐깁니다.",
+      "target_template": "default",
+      "keywords": ["넓은 관심사", "자료 보관", "지식 창고"],
       "weights": {
         "sseukssak:DefaultData": 0.5,
         "sseukssak:DefaultExternal": 0.3
       }
     },
-
     {
       "id": "hobby.explorer",
       "label": "여행 탐험가",
+      "description": "새로운 곳으로 떠나 경험하고 기록하는 것을 사랑합니다.",
+      "target_template": "hobby",
+      "keywords": ["새로운 경험", "추억 기록", "자유로운 영혼"],
       "weights": {
         "sseukssak:HobbyTravel": 0.7,
         "sseukssak:HobbyLeisure": 0.2
@@ -157,6 +206,9 @@
     {
       "id": "hobby.creator",
       "label": "창작자",
+      "description": "글, 그림 등 자신만의 콘텐츠를 만드는 것에 몰입합니다.",
+      "target_template": "hobby",
+      "keywords": ["아이디어 폭발", "창작 몰입", "감성 표현"],
       "weights": {
         "sseukssak:HobbyCreation": 0.6,
         "sseukssak:HobbyLeisure": 0.2
@@ -165,6 +217,9 @@
     {
       "id": "hobby.reviewer",
       "label": "문화 감상자",
+      "description": "영화, 음악, 책 등 다양한 문화를 깊이 있게 즐깁니다.",
+      "target_template": "hobby",
+      "keywords": ["취향 수집", "비평적 시각", "문화 향유"],
       "weights": {
         "sseukssak:HobbyLeisure": 0.7,
         "sseukssak:HobbyCreation": 0.2
@@ -173,6 +228,9 @@
     {
       "id": "hobby.active_life",
       "label": "액티브 라이프형",
+      "description": "운동과 여행을 통해 에너지를 발산하는 활동가입니다.",
+      "target_template": "hobby",
+      "keywords": ["에너지 발산", "건강 관리", "활동적 삶"],
       "weights": {
         "sseukssak:HobbyLeisure": 0.4,
         "sseukssak:HobbyTravel": 0.4
@@ -181,6 +239,9 @@
     {
       "id": "hobby.animal_friendly",
       "label": "반려 케어형",
+      "description": "반려동물과의 교감을 소중히 여기며 관련 기록을 남깁니다.",
+      "target_template": "hobby",
+      "keywords": ["생명 존중", "교감 능력", "책임감"],
       "weights": {
         "sseukssak:HobbyLeisure": 0.8
       }

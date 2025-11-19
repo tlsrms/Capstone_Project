@@ -54,5 +54,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = [] # (슈퍼유저 만들 때 email 외에 추가로 물어볼 필드, 지금은 없음)
 
+    last_neatness_score = models.FloatField(default=0.0)
+
     def __str__(self):
         return self.email

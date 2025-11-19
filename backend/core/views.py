@@ -14,7 +14,7 @@ from .serializers import DocumentSerializer, TagSerializer
 import os 
 from django.db.models import Q
 from analytics.metrics import compute_cleanliness, calculate_fragmentation, build_category_distribution
-from analytics.personas import score_personas
+from analytics.personas import load_persona_rules, score_personas
 
 from collections import defaultdict, Counter 
 
@@ -364,14 +364,13 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
 # ---------------------------------------------------
 class NeatnessScoreView(APIView):
     """
-    "깔끔지수" 계산 (논문 기반) + 감점 파일 목록 반환
+    "깔끔지수" 계산 및 이력 관리
     GET /api/neatness-score/
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def _format_doc_details(self, doc: TextDocument) -> dict:
-        """Helper: 응답용으로 문서 정보를 간단히 포맷합니다."""
+    def _format_doc_details(self, doc):
         return {
             "id": doc.id,
             "title": doc.title,
@@ -381,84 +380,112 @@ class NeatnessScoreView(APIView):
     def get(self, request):
         user = request.user
         
-        # 1. RDB에서 모든 문서 정보를 '한 번만' 가져옴 
+        # 1. RDB 데이터 조회
         user_docs_qs = TextDocument.objects.filter(
             author=user, file_path__isnull=False
         ).exclude(file_path="")
         
-        # 빠른 조회를 위해 {id: doc} 딕셔너리로 변환
         user_docs_map = {doc.id: doc for doc in user_docs_qs}
         total_files = len(user_docs_map)
 
+        # 파일이 없으면 0점 처리
         if total_files == 0:
-            return Response({"score": 0.0, "details": {}}, status=status.HTTP_200_OK)
+            return Response({
+                "score": 0.0, 
+                "previous_score": user.last_neatness_score, # 기존 점수 유지
+                "improvement": 0.0,
+                "raw_ratios": {"R_title": 0, "R_frag": 0, "R_shallow": 0, "R_deep": 0},
+                "details": {}
+            }, status=status.HTTP_200_OK)
 
-        # 2. BE가 RDB 기반으로 3대 지표 계산 + 감점 파일 목록 생성
+        # 2. 감점 요인 집계
         meaningless_files = []
         too_shallow_files = []
         too_deep_files = []
-
         meaningless_keywords = ["제목 없음", "Untitled", "untitled", "document", "새 문서"]
 
         for doc in user_docs_map.values():
-            # A) R_title (무의미 제목)
+            # A) R_title
             is_meaningless = False
             if doc.title == "":
                 is_meaningless = True
             else:
-                # 'untitled.txt' 같은 케이스를 잡기 위해 파일명(경로)도 검사
                 filename = os.path.basename(doc.file_path)
-                if any(keyword.lower() in doc.title.lower() or keyword.lower() in filename.lower() for keyword in meaningless_keywords):
+                if any(k.lower() in doc.title.lower() or k.lower() in filename.lower() for k in meaningless_keywords):
                     is_meaningless = True
-                    
             if is_meaningless:
                 meaningless_files.append(self._format_doc_details(doc))
 
-            # B) R_shallow / R_deep (깊이)
+            # B) R_shallow / R_deep
             try:
                 path_str = os.path.normpath(doc.file_path)
                 dir_str = os.path.dirname(path_str)
                 depth = len(dir_str.rstrip(os.sep).split(os.sep)) - 1 
                 
-                if depth <= 1: # 얕은 깊이 (depth 0 또는 1)
-                    too_shallow_files.append(self._format_doc_details(doc))
-                elif depth >= 5: # 깊은 깊이 (논문 정의)
-                    too_deep_files.append(self._format_doc_details(doc))
+                if depth <= 1: too_shallow_files.append(self._format_doc_details(doc))
+                elif depth >= 5: too_deep_files.append(self._format_doc_details(doc))
             except Exception:
                 pass 
 
-        # 3. BE가 (RDB + Fuseki) 기반으로 R_frag 지표 계산
+        # C) R_frag
         fragmented_count, fragmented_doc_ids = calculate_fragmentation(user) 
-        
-        # 4. R_frag 감점 파일 목록 생성
         fragmented_files = []
         for doc_id in fragmented_doc_ids:
             if doc_id in user_docs_map:
                 fragmented_files.append(self._format_doc_details(user_docs_map[doc_id]))
 
-        # 5. (analytics) 4개 지표 '카운트'를 합산
-        meaningless_count_val = len(meaningless_files)
-        too_shallow_count_val = len(too_shallow_files)
-        too_deep_count_val = len(too_deep_files)
-
-        score = compute_cleanliness(
-            total_files=total_files,
-            meaningless_count=meaningless_count_val,
-            fragmented_count=fragmented_count,
-            too_shallow_count=too_shallow_count_val,
-            too_deep_count=too_deep_count_val
-        )
+        # 3. 점수 및 비율(Ratio) 계산
+        cnt_meaningless = len(meaningless_files)
+        cnt_shallow = len(too_shallow_files)
+        cnt_deep = len(too_deep_files)
         
-        # 6. 최종 응답에 '파일 목록' 포함
+        # 가중치 적용 전 '순수 비율(0~100)' 계산 (논문의 R 값들)
+        # R = (count / total) * 100
+        r_title = round((cnt_meaningless / total_files) * 100, 1)
+        r_frag = round((fragmented_count / total_files) * 100, 1)
+        r_shallow = round((cnt_shallow / total_files) * 100, 1)
+        r_deep = round((cnt_deep / total_files) * 100, 1)
+
+        # 최종 점수 계산
+        current_score = compute_cleanliness(
+            total_files=total_files,
+            meaningless_count=cnt_meaningless,
+            fragmented_count=fragmented_count,
+            too_shallow_count=cnt_shallow,
+            too_deep_count=cnt_deep
+        )
+        current_score = round(current_score, 2)
+
+        # 4. 변화량 계산 및 업데이트
+        previous_score = user.last_neatness_score
+        improvement = round(current_score - previous_score, 2)
+
+        # (DB 업데이트) 현재 계산된 점수를 '마지막 점수'로 저장
+        user.last_neatness_score = current_score
+        user.save()
+
+        # 5. 최종 응답
         return Response(
             {
-                "score": round(score, 2),
+                "score": current_score,              # 현재 점수
+                "previous_score": previous_score,    # 이전 점수 (업데이트 전)
+                "improvement": improvement,          # 변화량 (+/-)
+                
+                # 가중치 적용 전 각 요소의 순수 점수 (0~100)
+                "raw_ratios": {
+                    "R_title": r_title,      # 무의미한 제목 비율
+                    "R_frag": r_frag,        # 파편화 비율
+                    "R_shallow": r_shallow,  # 얕은 깊이 비율
+                    "R_deep": r_deep         # 깊은 깊이 비율
+                },
+                
+                # 상세 파일 목록
                 "details": {
                     "total_files": total_files,
-                    "meaningless": {"count": meaningless_count_val, "files": meaningless_files},
+                    "meaningless": {"count": cnt_meaningless, "files": meaningless_files},
                     "fragmented": {"count": fragmented_count, "files": fragmented_files},
-                    "shallow": {"count": too_shallow_count_val, "files": too_shallow_files},
-                    "deep": {"count": too_deep_count_val, "files": too_deep_files},
+                    "shallow": {"count": cnt_shallow, "files": too_shallow_files},
+                    "deep": {"count": cnt_deep, "files": too_deep_files},
                 }
             },
             status=status.HTTP_200_OK
@@ -469,7 +496,7 @@ class NeatnessScoreView(APIView):
 # ---------------------------------------------------
 class DashboardView(APIView):
     """
-    [핵심 기능] "대시보드" 데이터 조회 (온톨로지 추론)
+    "대시보드" 데이터 조회 (온톨로지 추론)
     GET /api/dashboard/?mode=developer
     - '본업' 모드: '기타' 없음. 해당 템플릿의 축(e.g., 학생 5축)을 보여줌.
     - '취미' 모드: (본업/여가/여행/창작/기타 5축)
@@ -706,172 +733,214 @@ class DashboardView(APIView):
         
         return Response(response_data, status=status.HTTP_200_OK)
     
+# ---------------------------------------------------
+# 2.5 BE: 디지털 페르소나 API 뷰
+# ---------------------------------------------------
 class PersonaAnalysisView(APIView):
     """
-    [핵심 기능] 사용자 페르소나 분석
+    "디지털 페르소나" 분석
     GET /api/persona/
-    
-    - Fuseki의 온톨로지(문서 타입/카테고리)를 기반으로
-      사용자 문서 분포를 계산하고
-    - personas.json에 정의된 페르소나들과의 코사인 유사도를 계산하여
-      'MBTI 결과'처럼 가장 유사한 페르소나를 알려주는 API.
-      
-    LLM(ollama)은 사용하지 않고, 수학적 유사도만 사용합니다.
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
-    # DashboardView와 동일 설정 재사용
-    SCHEMA_URI = DashboardView.SCHEMA_URI
-    FUSEKI_QUERY_ENDPOINT = DashboardView.FUSEKI_QUERY_ENDPOINT
-    WORK_TEMPLATE_CLASS = DashboardView.TEMPLATES_CLASSES["work_root"]  # "WorkTemplate"
+    SCHEMA_URI = "http://api.sseukssak.com/ontology#"
+    FUSEKI_QUERY_ENDPOINT = "http://localhost:3030/sseukssak/query"
+    
+    # DashboardView의 상수와 헬퍼 함수 재사용
+    TEMPLATES_CLASSES = DashboardView.TEMPLATES_CLASSES
+    CATEGORY_LABELS = DashboardView.CATEGORY_LABELS
+    _execute_sparql_query = DashboardView._execute_sparql_query
+    
+    # 직업별 카테고리 접두사 
+    JOB_PREFIX_MAP = getattr(DashboardView, 'JOB_PREFIX_MAP', {
+        "developer": "sseukssak:Dev", "student": "sseukssak:Stu",
+        "office_worker": "sseukssak:Office", "default": "sseukssak:Default",
+        "hobby": "sseukssak:Hobby"
+    })
 
-    # 직업군별 카테고리 IRI prefix 매핑
-    JOB_CATEGORY_PREFIXES = {
-        "developer": ("sseukssak:Dev",),
-        "student": ("sseukssak:Stu",),
-        "office_worker": ("sseukssak:Office",),
-        "default": ("sseukssak:Default",),
-        "hobby": ("sseukssak:Hobby",),
+    # ---------------------------------------------------
+    # 카테고리별 '성향 키워드' 매핑 (User Characteristic)
+    # ---------------------------------------------------
+    CATEGORY_KEYWORDS = {
+        # 개발자
+        "sseukssak:DevPlanning": "큰 그림 설계",
+        "sseukssak:DevDevelopment": "구현 집착력",
+        "sseukssak:DevDeployment": "배포 마스터",
+        "sseukssak:DevDebugging": "문제 해결사",
+        "sseukssak:DevCollaboration": "팀워크 시너지",
+        "sseukssak:DevLearning": "신기술 탐구",
+        # 학생
+        "sseukssak:StuLearning": "학업 몰입도",
+        "sseukssak:StuResearch": "심층 분석력",
+        "sseukssak:StuAssignment": "과제 격파력",
+        "sseukssak:StuCollaboration": "협업 능력",
+        "sseukssak:StuSchedule": "계획 준수",
+        # 회사원
+        "sseukssak:OfficePlan": "비즈니스 기획",
+        "sseukssak:OfficeCommunication": "소통 전문가",
+        "sseukssak:OfficeWorkLogs": "기록 강박",
+        "sseukssak:OfficeInvestigation": "데이터 기반",
+        "sseukssak:OfficeAdministration": "행정 마스터",
+        # 일반
+        "sseukssak:DefaultSchedule": "시간 관리",
+        "sseukssak:DefaultReports": "문서화 능력",
+        "sseukssak:DefaultData": "정보 수집광",
+        "sseukssak:DefaultEducation": "자기 계발",
+        "sseukssak:DefaultExternal": "대외 활동",
+        # 취미
+        "sseukssak:HobbyMainJob": "워커홀릭",
+        "sseukssak:HobbyLeisure": "문화 향유",
+        "sseukssak:HobbyTravel": "모험심",
+        "sseukssak:HobbyCreation": "창작 몰입도",
+        "sseukssak:Other": "호기심 천국"
     }
-
-    # 직업군별 페르소나 id prefix 매핑
-    JOB_PERSONA_PREFIXES = {
-        "developer": ("dev.",),
-        "student": ("stu.", "scholarship."),  # 장학금 페르소나는 학생 계열
-        "office_worker": ("office.",),
-        "default": ("default.",),
-        "hobby": ("hobby.",),
-    }
-
-    def _execute_sparql_query(self, query: str) -> list:
-        """Fuseki에 SPARQL 쿼리를 보내고 bindings 리스트를 반환."""
-        try:
-            sparql = SPARQLWrapper(self.FUSEKI_QUERY_ENDPOINT)
-            sparql.setQuery(query)
-            sparql.setReturnFormat(JSON)
-            results = sparql.query().convert()
-            return results.get("results", {}).get("bindings", [])
-        except Exception as e:
-            print(f"[Fuseki Error] Persona SPARQL query failed: {e}")
-            return []
-
-    def _get_category_counts(self, user_id: int) -> dict:
-        """
-        Fuseki에서 로그인 사용자의 문서들을
-        '작업 카테고리(Dev/Stu/Office/Default/HobbyMainJob 등)' 기준으로 집계.
-
-        반환값 예:
-        {
-          "sseukssak:DevDevelopment": 10,
-          "sseukssak:StuLearning": 3,
-          ...
-        }
-        """
-        user_uri = f"{self.SCHEMA_URI}User_{user_id}"
-        work_root_uri = f"<{self.SCHEMA_URI}{self.WORK_TEMPLATE_CLASS}>"
-
-        query = f"""
-        PREFIX sseukssak: <{self.SCHEMA_URI}>
-        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-
-        SELECT ?category_uri (COUNT(?doc) AS ?count)
-        WHERE {{
-            ?doc sseukssak:hasOwner <{user_uri}> ;
-                 sseukssak:hasType ?type .
-            ?type rdfs:subClassOf* ?category_uri .
-            ?category_uri rdfs:subClassOf {work_root_uri} .
-        }}
-        GROUP BY ?category_uri
-        """
-
-        bindings = self._execute_sparql_query(query)
-        category_counts: dict = {}
-
-        for b in bindings:
-            category_uri_full = b["category_uri"]["value"]  # 예: http://api.sseukssak.com/ontology#DevDevelopment
-            count = int(b["count"]["value"])
-
-            # prefix 형태로 변환: sseukssak:DevDevelopment
-            if category_uri_full.startswith(self.SCHEMA_URI):
-                local = category_uri_full[len(self.SCHEMA_URI):]
-                key = f"sseukssak:{local}"
-            else:
-                key = category_uri_full
-
-            category_counts[key] = category_counts.get(key, 0) + count
-
-        return category_counts
 
     def get(self, request):
         user = request.user
+        user_uri = f"{self.SCHEMA_URI}User_{user.id}"
+        user_job_template = user.job_template 
+        
+        work_root_uri = f"<{self.SCHEMA_URI}{self.TEMPLATES_CLASSES['work_root']}>"
 
-        # 1) Fuseki에서 카테고리별 문서 수 집계 (전체)
-        raw_category_counts = self._get_category_counts(user.id)
+        # 1. (Fuseki) 전체 문서 카운트 집계
+        query = f"""
+        PREFIX sseukssak: <{self.SCHEMA_URI}>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
-        if not raw_category_counts:
-            return Response(
-                {
-                    "message": "사용자 문서에 대한 온톨로지 정보가 충분하지 않아 페르소나를 계산할 수 없습니다.",
-                    "category_distribution": {},
-                    "personas": [],
-                    "top_persona": None,
-                },
-                status=status.HTTP_200_OK,
-            )
+        SELECT ?category_uri (COUNT(?doc) AS ?count)
+        WHERE {{
+            ?doc sseukssak:hasOwner <{user_uri}> .
+            ?doc sseukssak:hasType ?type .
+            ?type rdfs:subClassOf* ?category_uri .
+            ?category_uri rdfs:subClassOf* {work_root_uri} . 
+        }}
+        GROUP BY ?category_uri
+        """
+        
+        sparql_results = self._execute_sparql_query(query)
 
-        # 2) 유저 직업군 가져오기 (없으면 default로 처리)
-        job_template = getattr(user, "job_template", None) or "default"
+        category_counts_map = {}
 
-        # 2-1) 직업군별 카테고리 prefix 결정
-        category_prefixes = self.JOB_CATEGORY_PREFIXES.get(job_template, ())
+        valid_total_docs = 0
+        for res in sparql_results:
+            uri = res["category_uri"]["value"].replace(self.SCHEMA_URI, "sseukssak:")
+            count = int(res["count"]["value"])
+            
+            # 우리가 '성향 키워드'를 정의해 둔 카테고리만 유효한 데이터로 인정
+            if uri in self.CATEGORY_KEYWORDS:
+                category_counts_map[uri] = count
+                valid_total_docs += count
+            
+        # 2. (Analytics) 분포 및 페르소나 점수 계산
+        category_distribution = build_category_distribution(category_counts_map)
+        all_scores = score_personas(category_distribution)
+        
+        persona_rules_data = load_persona_rules()
+        persona_lookup = {p['id']: p for p in persona_rules_data.get('personas', [])}
 
-        # 2-2) 해당 prefix로 카테고리 필터링
-        if category_prefixes:
-            category_counts = {
-                iri: cnt
-                for iri, cnt in raw_category_counts.items()
-                if any(iri.startswith(prefix) for prefix in category_prefixes)
-            }
-        else:
-            category_counts = raw_category_counts
+        # 3. 현재 직업에 맞는 페르소나 필터링
+        valid_scores = []
+        for p_score in all_scores:
+            p_id = p_score['id']
+            origin_data = persona_lookup.get(p_id, {})
+            target = origin_data.get('target_template')
+            if target == user_job_template or target == 'all' or not target:
+                valid_scores.append(p_score)
+        
+        if not valid_scores:
+            valid_scores = all_scores
 
-        # 혹시 필터링을 했더니 완전히 비어버리면, 일단 전체를 쓰도록 graceful fallback
-        if not category_counts:
-            category_counts = raw_category_counts
-
-        # 3) 카테고리 분포(0~1) 계산
-        category_dist = build_category_distribution(category_counts)
-
-        # 4) 페르소나 유사도 계산 (전체 퍼소나 대상)
-        all_personas = score_personas(category_dist)
-
-        # 5) 직업군별로 "해당되는 퍼소나만" 필터링
-        persona_prefixes = self.JOB_PERSONA_PREFIXES.get(job_template, ())
-        if persona_prefixes:
-            filtered_personas = [
-                p for p in all_personas
-                if any(p["id"].startswith(pref) for pref in persona_prefixes)
-            ]
-        else:
-            filtered_personas = all_personas
-
-        # 마찬가지로, 필터링 후 아무것도 없으면 전체 리스트로 fallback
-        if filtered_personas:
-            persona_scores = filtered_personas
-        else:
-            persona_scores = all_personas
-
-        top_persona = persona_scores[0] if persona_scores else None
-
-        # 6) 응답 생성
-        return Response(
-            {
-                "job_template": job_template,
-                "category_distribution": category_dist,  # 이미 직업군 필터 후 분포
-                "personas": persona_scores,             # 직업군에 맞는 후보들
-                "top_persona": top_persona,             # 그 중 최고점
-            },
-            status=status.HTTP_200_OK,
+        # ---------------------------------------------------
+        # Top 5 카테고리 및 키워드 추출
+        # ---------------------------------------------------
+        
+        # 1. 내 직업에 맞는 prefix 가져오기 (예: "sseukssak:Stu")
+        # (JOB_PREFIX_MAP은 클래스 상단에 정의되어 있음)
+        target_prefix = self.JOB_PREFIX_MAP.get(user_job_template, "sseukssak:Default")
+        
+        # 2. 내 직업과 관련된 카테고리만 남기기
+        filtered_counts_map = {
+            uri: count 
+            for uri, count in category_counts_map.items() 
+            if uri.startswith(target_prefix) or user_job_template == "default"
+        }
+        
+        # 3. 필터링된 맵으로 정렬 수행
+        sorted_categories = sorted(
+            filtered_counts_map.items(), 
+            key=lambda item: item[1], 
+            reverse=True
         )
+        
+        # 4. 상위 5개 추출 및 데이터 구성
+        top_5_types = []
+        for uri, count in sorted_categories[:5]:
+            percent = round((count / valid_total_docs) * 100, 1) if valid_total_docs > 0 else 0
+            label = self.CATEGORY_LABELS.get(uri, uri.split(':')[-1])
+            keyword = self.CATEGORY_KEYWORDS.get(uri, label) # 키워드 매핑
+            
+            top_5_types.append({
+                "category": label,      # 예: "창작"
+                "ratio": percent,       # 예: 45.5 (%)
+                "keyword": keyword      # 예: "창작 몰입도"
+            })
+        
+        # user_keywords를 Top 5 전체로 확장
+        user_keywords = [item['keyword'] for item in top_5_types]
+
+        # ---------------------------------------------------
+        
+        # 상위 4개 페르소나 추출 
+        top_4_list = valid_scores[:4]
+        enriched_top_4 = []
+        for p_score in top_4_list:
+            p_id = p_score['id']
+            origin_data = persona_lookup.get(p_id, {})
+            weights = origin_data.get('weights', {})
+            
+            # 각 페르소나의 특징 3가지
+            features = origin_data.get('keywords', [])
+            
+            enriched_top_4.append({
+                "id": p_id,
+                "label": p_score['label'],
+                "score": int(p_score['score'] * 100),
+                "description": origin_data.get('description', ''),
+                "features": features
+            })
+
+        # Best Persona 상세 데이터 구성 (1등)
+        best_persona_enriched = None
+        if enriched_top_4:
+            best_persona_enriched = enriched_top_4[0].copy()
+            
+            # 이상적인 페르소나 모양 (Full Axis)
+            p_id = best_persona_enriched['id']
+            weights = persona_lookup.get(p_id, {}).get('weights', {})
+            
+            target_prefix = self.JOB_PREFIX_MAP.get(user_job_template, "sseukssak:Default")
+            full_axes_uris = [
+                uri for uri in self.CATEGORY_LABELS.keys()
+                if uri.startswith(target_prefix)
+            ]
+            
+            ideal_shape = []
+            for uri in full_axes_uris:
+                value = weights.get(uri, 0.1) # 기본값 0.1
+                ideal_shape.append({
+                    "axis": uri,
+                    "label": self.CATEGORY_LABELS.get(uri, uri.split(':')[-1]),
+                    "value": value
+                })
+            best_persona_enriched['ideal_shape'] = ideal_shape
+
+        # 6. 최종 응답
+        return Response({
+            "user_job": user_job_template,
+            "user_keywords": user_keywords,         # 5개 키워드 반환
+            "top_5_types": top_5_types,             # 상위 5개 상세 정보
+            "best_persona": best_persona_enriched,  
+            "top_4_personas": enriched_top_4,       
+        }, status=status.HTTP_200_OK)
+    
