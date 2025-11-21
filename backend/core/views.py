@@ -943,4 +943,116 @@ class PersonaAnalysisView(APIView):
             "best_persona": best_persona_enriched,  
             "top_4_personas": enriched_top_4,       
         }, status=status.HTTP_200_OK)
+
+# ---------------------------------------------------
+# 3.4 BE: 지능형 검색 API 뷰
+# ---------------------------------------------------
+class SearchView(APIView):
+    """
+    지능형 검색
+    GET /api/search/?q=키워드
+    - Fuseki에 저장된 '의미(Semantic) 정보'를 검색합니다.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    SCHEMA_URI = "http://api.sseukssak.com/ontology#"
+    FUSEKI_QUERY_ENDPOINT = "http://localhost:3030/sseukssak/query"
     
+    # 검색 대상으로 삼을 '의미적 관계'들 (OrganizeView의 DISCOVERABLE_PREDICATES 참고)
+    SEARCH_TARGET_PREDICATES = [
+        "sseukssak:discussesTopic",       # 주제
+        "sseukssak:mentionsNamedEntity",  # 고유명사 (기술명, 회사명 등)
+        "sseukssak:mentionsPerson",       # 인물
+        "sseukssak:mentionsPlace",        # 장소
+        "sseukssak:mentionsEvent",        # 이벤트
+        "sseukssak:referencesDate",       # 날짜
+        "sseukssak:requestsAction",       # 행동 요청
+    ]
+    
+    # 헬퍼 함수 재사용 (DashboardView와 동일)
+    _execute_sparql_query = DashboardView._execute_sparql_query
+    _get_documents_from_rdb = DashboardView._get_documents_from_rdb
+
+    def get(self, request):
+        user = request.user
+        user_uri = f"{self.SCHEMA_URI}User_{user.id}"
+        
+        query_keyword = request.query_params.get('q', '').strip()
+        
+        if not query_keyword:
+            return Response(
+                {"message": "검색어를 입력해주세요.", "results": []},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 1. (Fuseki) SPARQL 검색 쿼리 생성
+        # - 사용자의 문서(?doc) 중에서
+        # - 우리가 지정한 관계(?p)를 가지고 있고
+        # - 그 대상(?o)이 검색어를 포함(REGEX)하는 경우를 찾음
+        
+        # 검색 대상 Predicate들을 쿼리용 문자열로 변환 (<...>, <...>)
+        predicate_list_str = ", ".join(
+            f"<{self.SCHEMA_URI}{p.split(':')[-1]}>" for p in self.SEARCH_TARGET_PREDICATES
+        )
+
+        sparql_query = f"""
+        PREFIX sseukssak: <{self.SCHEMA_URI}>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        SELECT DISTINCT ?doc_id ?predicate ?object
+        WHERE {{
+            ?doc sseukssak:hasOwner <{user_uri}> .
+            
+            # 지정된 관계(?p)들 중에서만 검색
+            ?doc ?predicate ?object .
+            FILTER(?predicate IN ({predicate_list_str}))
+            
+            # 검색어 포함 여부 (대소문자 무시 'i')
+            FILTER regex(str(?object), "{query_keyword}", "i")
+            
+            # 문서 ID 추출
+            BIND(STRAFTER(STR(?doc), "Document_") AS ?doc_id_str)
+            BIND(xsd:integer(?doc_id_str) AS ?doc_id)
+        }}
+        """
+        
+        sparql_results = self._execute_sparql_query(sparql_query)
+        
+        # 2. (RDB) 문서 상세 정보 가져오기
+        found_doc_ids = {int(res["doc_id"]["value"]) for res in sparql_results}
+        doc_details_map = self._get_documents_from_rdb(found_doc_ids)
+        
+        # 3. (BE) 결과 데이터 조립
+        # - 단순히 문서만 주는 게 아니라, "왜(Why)" 검색되었는지(매칭된 이유)를 알려줍니다.
+        search_results = []
+        
+        # Fuseki 결과(매칭된 '이유')를 문서별로 그룹화
+        # { doc_id: [ {"reason": "mentionsNamedEntity", "match": "Django"}, ... ] }
+        match_reasons = defaultdict(list)
+        for res in sparql_results:
+            doc_id = int(res["doc_id"]["value"])
+            predicate = res["predicate"]["value"].replace(self.SCHEMA_URI, "sseukssak:")
+            obj_value = res["object"]["value"]
+            
+            match_reasons[doc_id].append({
+                "predicate": predicate, # 예: sseukssak:mentionsNamedEntity
+                "match": obj_value      # 예: Django
+            })
+            
+        # 최종 리스트 생성
+        for doc_id, details in doc_details_map.items():
+            reasons = match_reasons.get(doc_id, [])
+            
+            search_results.append({
+                "document": details,  # RDB의 문서 정보 (id, title, summary...)
+                "matched_reasons": reasons # 검색된 이유 (메타데이터 매칭 정보)
+            })
+            
+        return Response({
+            "keyword": query_keyword,
+            "count": len(search_results),
+            "results": search_results
+        }, status=status.HTTP_200_OK)
+

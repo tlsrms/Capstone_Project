@@ -48,6 +48,13 @@ urlpatterns = [
         views.DashboardView.as_view(), 
         name='dashboard'
     ),
+
+    # 3.4 BE: 지능형 검색 API
+    path(
+        'search/', 
+        views.SearchView.as_view(), 
+        name='search'
+    ),
 ]
 
 urlpatterns += [
