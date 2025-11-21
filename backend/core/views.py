@@ -18,33 +18,70 @@ from analytics.personas import load_persona_rules, score_personas
 
 from collections import defaultdict, Counter 
 
+from .extractors import TextExtractor
+
 class DocumentViewSet(viewsets.ModelViewSet): 
     """
     문서(TextDocument)에 대한 CRUD API를 처리하는 뷰셋
+    (3.3 티켓: 파일 경로 기반 자동 텍스트 추출 기능 추가)
     """
     serializer_class = DocumentSerializer
     
     authentication_classes = [JWTAuthentication] 
-    permission_classes = [IsAuthenticated]     
+    permission_classes = [IsAuthenticated]    
+     
     def get_queryset(self):
         """ (GET) '내 글 목록'만 필터링 """
         return TextDocument.objects.filter(author=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
-        """ (POST) '글쓴이'를 나로 자동 지정 """
-        serializer.save(author=self.request.user)
+        """ (POST) 문서 생성 시 파일이 있으면 텍스트 추출 """
+        # 1. 요청 데이터에서 file_path 확인
+        file_path = self.request.data.get('file_path')
+        content = self.request.data.get('content', '')
+
+        # 2. file_path는 있는데 content가 비어있다면? -> 자동 추출 시도
+        if file_path and not content:
+            print(f"[Extractor] Extracting text from: {file_path}")
+            extracted_text = TextExtractor.extract(file_path)
+            if extracted_text:
+                print(f"[Extractor] Success! Length: {len(extracted_text)}")
+                serializer.save(author=self.request.user, content=extracted_text)
+            else:
+                print("[Extractor] Failed or empty content.")
+                serializer.save(author=self.request.user)
+        else:
+            # 파일이 없거나 content를 직접 보낸 경우
+            serializer.save(author=self.request.user)
     
     def perform_update(self, serializer):
         """
-        (PUT/PATCH) 문서가 업데이트될 때 호출됩니다.
+        (PUT/PATCH) 문서 수정 시
+        1. 파일 경로가 바뀌었으면 재추출
+        2. 내용이 바뀌었으므로 is_organized 리셋 (재분류 트리거)
         """
-        print(f"[Trigger] Document {serializer.instance.id} updated. Flagging for re-organization.")
-        serializer.save(is_organized=False, summary="")
+        instance = serializer.instance
+        new_file_path = self.request.data.get('file_path')
+        
+        # 파일 경로가 새로 들어왔고, 기존과 다르다면? -> 재추출
+        if new_file_path and new_file_path != instance.file_path:
+            print(f"[Extractor] File changed to: {new_file_path}. Re-extracting...")
+            extracted_text = TextExtractor.extract(new_file_path)
+            
+            # 추출된 텍스트로 content 업데이트, 깃발 리셋
+            serializer.save(
+                content=extracted_text, 
+                is_organized=False, 
+                summary=""
+            )
+        else:
+            # 파일은 그대로지만 제목/내용 등 다른 게 바뀐 경우 -> 깃발만 리셋
+            print(f"[Trigger] Document {instance.id} updated. Flagging for re-organization.")
+            serializer.save(is_organized=False, summary="")
 
 # ---------------------------------------------------
 # 2.6 BE: 태그 기능 뷰
 # ---------------------------------------------------
-
 class TagViewSet(mixins.CreateModelMixin,         # 1. (POST /api/tags/) 태그 생성
                 mixins.ListModelMixin,           # 2. (GET /api/tags/) 태그 목록 조회
                 viewsets.GenericViewSet):
