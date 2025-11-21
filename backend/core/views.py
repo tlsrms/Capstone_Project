@@ -22,62 +22,94 @@ from .extractors import TextExtractor
 
 class DocumentViewSet(viewsets.ModelViewSet): 
     """
-    문서(TextDocument)에 대한 CRUD API를 처리하는 뷰셋
-    (3.3 티켓: 파일 경로 기반 자동 텍스트 추출 기능 추가)
+    문서(TextDocument) CRUD API
+    - 파일 업로드 시: uploaded_file에서 텍스트 추출 + file_path는 분석용으로 저장
+    - 메모장 작성 시: content 직접 저장
+    - 수정 시: Fuseki 데이터 초기화 (semantic_details 리셋)
     """
     serializer_class = DocumentSerializer
-    
     authentication_classes = [JWTAuthentication] 
-    permission_classes = [IsAuthenticated]    
-     
+    permission_classes = [IsAuthenticated]     
+    
+    # Fuseki 설정
+    FUSEKI_UPDATE_ENDPOINT = "http://localhost:3030/sseukssak/update"
+    SCHEMA_URI = "http://api.sseukssak.com/ontology#"
+
     def get_queryset(self):
-        """ (GET) '내 글 목록'만 필터링 """
         return TextDocument.objects.filter(author=self.request.user).order_by('-created_at')
 
-    def perform_create(self, serializer):
-        """ (POST) 문서 생성 시 파일이 있으면 텍스트 추출 """
-        # 1. 요청 데이터에서 file_path 확인
-        file_path = self.request.data.get('file_path')
-        content = self.request.data.get('content', '')
+    # Fuseki 데이터 삭제 헬퍼 함수
+    def _delete_fuseki_data(self, doc_id):
+        """
+        문서 내용이 변경되었을 때, Fuseki에 저장된 '옛날 지식'을 삭제합니다.
+        """
+        doc_uri = f"{self.SCHEMA_URI}Document_{doc_id}"
+        delete_query = f"""
+        PREFIX sseukssak: <{self.SCHEMA_URI}>
+        DELETE WHERE {{
+            <{doc_uri}> ?predicate ?object .
+        }}
+        """
+        try:
+            sparql = SPARQLWrapper(self.FUSEKI_UPDATE_ENDPOINT)
+            sparql.setMethod(POST)
+            sparql.setQuery(delete_query)
+            sparql.query()
+            print(f"[Fuseki] Cleared old triples for Document {doc_id}")
+        except Exception as e:
+            print(f"[Fuseki Error] Failed to clear triples: {e}")
 
-        # 2. file_path는 있는데 content가 비어있다면? -> 자동 추출 시도
-        if file_path and not content:
-            print(f"[Extractor] Extracting text from: {file_path}")
-            extracted_text = TextExtractor.extract(file_path)
+    def perform_create(self, serializer):
+        """ (POST) 문서 생성 """
+        # 1. 일단 데이터 저장
+        instance = serializer.save(author=self.request.user)
+        
+        # 2. 파일 업로드 -> 텍스트 추출
+        if instance.uploaded_file:
+            print(f"[Extractor] Uploaded file detected: {instance.uploaded_file.name}")
+            extracted_text = TextExtractor.extract(instance.uploaded_file.path)
+            
             if extracted_text:
                 print(f"[Extractor] Success! Length: {len(extracted_text)}")
-                serializer.save(author=self.request.user, content=extracted_text)
+                instance.content = extracted_text
+                instance.save()
             else:
-                print("[Extractor] Failed or empty content.")
-                serializer.save(author=self.request.user)
-        else:
-            # 파일이 없거나 content를 직접 보낸 경우
-            serializer.save(author=self.request.user)
-    
-    def perform_update(self, serializer):
-        """
-        (PUT/PATCH) 문서 수정 시
-        1. 파일 경로가 바뀌었으면 재추출
-        2. 내용이 바뀌었으므로 is_organized 리셋 (재분류 트리거)
-        """
-        instance = serializer.instance
-        new_file_path = self.request.data.get('file_path')
+                print("[Extractor] Failed to extract text or empty result.")
         
-        # 파일 경로가 새로 들어왔고, 기존과 다르다면? -> 재추출
-        if new_file_path and new_file_path != instance.file_path:
-            print(f"[Extractor] File changed to: {new_file_path}. Re-extracting...")
-            extracted_text = TextExtractor.extract(new_file_path)
+        elif instance.content:
+            print(f"[Memo] New text memo created: {instance.title}")
+
+    def perform_update(self, serializer):
+        """ (PUT/PATCH) 문서 수정 """
+        # 1. 변경 전 파일 정보
+        old_file = serializer.instance.uploaded_file
+        
+        # 2. 저장 실행 (RDB 업데이트)
+        instance = serializer.save()
+        new_file = instance.uploaded_file
+        
+        # 3. 파일이 '새로' 업로드된 경우 -> 재추출 + 초기화
+        if new_file and new_file != old_file:
+            print(f"[Extractor] File updated. Re-extracting from: {new_file.path}")
+            extracted_text = TextExtractor.extract(new_file.path)
             
-            # 추출된 텍스트로 content 업데이트, 깃발 리셋
-            serializer.save(
-                content=extracted_text, 
-                is_organized=False, 
-                summary=""
-            )
-        else:
-            # 파일은 그대로지만 제목/내용 등 다른 게 바뀐 경우 -> 깃발만 리셋
-            print(f"[Trigger] Document {instance.id} updated. Flagging for re-organization.")
-            serializer.save(is_organized=False, summary="")
+            instance.content = extracted_text
+            instance.is_organized = False 
+            instance.summary = ""
+            instance.save()
+            
+            # Fuseki 데이터 삭제 (semantic_details 초기화)
+            self._delete_fuseki_data(instance.id)
+            
+        # 4. 메타데이터(제목, 내용 등)가 바뀐 경우 -> 초기화
+        elif serializer.validated_data:
+             print(f"[Trigger] Metadata updated. Flagging for re-organization.")
+             instance.is_organized = False
+             instance.summary = ""
+             instance.save()
+
+             # Fuseki 데이터 삭제 (semantic_details 초기화)
+             self._delete_fuseki_data(instance.id)
 
 # ---------------------------------------------------
 # 2.6 BE: 태그 기능 뷰
@@ -203,50 +235,63 @@ class OrganizeView(APIView):
 
         # "reference_strings" 키 제거, "discovered_triples"로 통합
         return f"""
-Analyze the following text.
-Respond ONLY in JSON format with three keys: "summary", "type_label", and "discovered_triples".
+### INSTRUCTION ###
+Analyze the provided text and generate a JSON response based on the strict schema defined below.
+You must NOT output any other keys than "summary", "type_label", and "discovered_triples".
 
-1. "summary" (str): Provide a concise summary of the text. The summary should be written in Korean.
-2. "type_label" (str): Choose ONLY ONE `type_label` from this exact list: [{type_list_str}]
-3. "discovered_triples" (list[list[str]]):
-   Generate a list of (predicate, object) pairs you discover.
-   The subject is the document itself. 
-   Use predicates from this list ONLY: [{predicate_list_str}].
-   The object should be a simple string literal (e.g., "종합설계프로젝트", "Django", "Postman", "2025년").
-   If no triples are discovered, return [].
-   
-   Example:
-   "discovered_triples": [
-       ["sseukssak:discussesTopic", "종합설계프로젝트"],
-       ["sseukssak:mentionsNamedEntity", "Django"],
-       ["sseukssak:mentionsNamedEntity", "Postman"],
-       ["sseukssak:referencesDate", "2025년 2학기"]
-   ]
+### CONSTRAINT: type_label ###
+You MUST select exactly ONE type from this list:
+[{type_list_str}]
 
---- TEXT TO ANALYZE ---
-{document_content}
+### CONSTRAINT: discovered_triples ###
+Extract meaningful relationships. Use ONLY these predicates:
+[{predicate_list_str}]
+Format: [ ["predicate_uri", "object_string"], ... ]
+
+### INPUT TEXT ###
+{document_content[:3000]} 
+(Text truncated for processing limit...)
+
+### OUTPUT FORMAT (JSON ONLY) ###
+{{
+    "summary": "Summarize the text in Korean (1-2 sentences).",
+    "type_label": "One value from the list above",
+    "discovered_triples": [
+        ["sseukssak:discussesTopic", "Keyword"],
+        ["sseukssak:mentionsNamedEntity", "EntityName"]
+    ]
+}}
 """
 
     def call_ollama(self, prompt, model_name="gemma3:4b"):
         """
         Ollama 서버(2.1)에 API 요청을 보내고 3-Key JSON을 파싱합니다.
         """
-        OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
+        OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
         
+        system_instruction = (
+            "You are a strict JSON generator. "
+            "You output ONLY valid JSON. "
+            "Do not explain. Do not include Markdown formatting. "
+            "Follow the user's schema exactly."
+            "Translate the summary into Korean."
+        )
+
         try:
             payload = {
                 "model": model_name,
                 "format": "json",
                 "stream": False,
-                "messages": [{"role": "user", "content": prompt}]
+                "prompt": prompt,
+                "system": system_instruction
             }
             
-            response = requests.post(OLLAMA_ENDPOINT, json=payload, timeout=60) 
+            response = requests.post(OLLAMA_ENDPOINT, json=payload, timeout=120) 
             response.raise_for_status() 
 
             response_json = response.json()
-            message_content_str = response_json.get('message', {}).get('content', '{}')
-            
+            message_content_str = response_json.get('response', '{}')
+
             ai_result = json.loads(message_content_str) 
 
             # 3-Key 규격(Contract) 확인
