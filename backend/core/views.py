@@ -650,18 +650,25 @@ class DashboardView(APIView):
         
         doc_map = {}
         for doc in docs_qs:
+            file_url = None
+            if doc.uploaded_file:
+                try:
+                    file_url = self.request.build_absolute_uri(doc.uploaded_file.url)
+                except Exception:
+                    file_url = doc.uploaded_file.url
             doc_map[doc.id] = {
                 "id": doc.id,
                 "title": doc.title,
                 "summary": doc.summary,
                 "file_path": doc.file_path,
+                "uploaded_file": file_url,
                 "updated_at": doc.updated_at.isoformat()
             }
         return doc_map
 
     def _build_sparql_query(self, user_uri: str, mode: str, user_job_template_uri: str, template_uri: str) -> str:
         """
-        [수정] 요청 모드(hobby/developer)와 직업 템플릿에 따라
+        요청 모드(hobby/developer)와 직업 템플릿에 따라
         '카테고리'와 '문서 ID'를 추론하는 동적 SPARQL 쿼리를 생성합니다.
         """
         
