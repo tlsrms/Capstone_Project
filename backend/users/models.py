@@ -47,6 +47,10 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         default='default' # 기본값 '일반'
     )
 
+    google_email = models.EmailField(null=True, blank=True)
+    google_sub = models.CharField(max_length=255, null=True, blank=True)
+    google_access_token = models.TextField(null=True, blank=True)
+    google_refresh_token = models.TextField(null=True, blank=True)
     # 이 모델을 관리할 '매니저'를 위에서 만든 CustomUserManager로 지정
     objects = CustomUserManager()
     
