@@ -152,3 +152,10 @@ SIMPLE_JWT = {
     # 'Token' 방식과 달리, 헤더에 'Bearer' 키워드를 사용합니다.
     "AUTH_HEADER_TYPES": ("Bearer",), 
 }
+
+#파일 업로드(Media) 설정
+# 웹에서 접근할 URL (예: http://localhost:8000/media/파일.jpg)
+MEDIA_URL = '/media/'
+
+# 실제 파일이 저장될 서버 내 경로 (backend/media 폴더)
+MEDIA_ROOT = BASE_DIR / 'media'

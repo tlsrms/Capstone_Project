@@ -28,6 +28,9 @@ class TextDocument(models.Model):
     summary = models.TextField(blank=True, default='') # AI 요약본
 
     file_path = models.CharField(max_length=1024, blank=True, db_index=True) # (파편화/깊이 계산)을 위한 file_path 필드
+
+    # 실제 파일 저장 필드
+    uploaded_file = models.FileField(upload_to='documents/%Y/%m/%d/', blank=True, null=True)
     
     def __str__(self):
         return self.title
