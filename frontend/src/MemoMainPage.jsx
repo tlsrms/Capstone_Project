@@ -3,9 +3,9 @@ import React, { useState, useRef, useEffect } from 'react';
 // ============================================
 // API 설정
 // ============================================
-const API_BASE_URL = 'http://localhost:8000/api';  // 127.0.0.1 → localhost 변경!
+const API_BASE_URL = 'http://localhost:8000/api';
 
-const getAuthToken = () => localStorage.getItem('access_token');  // 'token' → 'access_token' 변경!
+const getAuthToken = () => localStorage.getItem('access_token');
 
 const getHeaders = () => {
     const headers = { 'Content-Type': 'application/json' };
@@ -46,7 +46,6 @@ const transformMemoFromBackend = (backendMemo) => {
         title: backendMemo.title || '제목 없음',
         content: regularContent.join('\n'),
         tags: backendMemo.tags ? backendMemo.tags.map(tag => tag.tag_name) : [],
-        important: false,
         todos: todos,
         created_at: backendMemo.created_at,
         updated_at: backendMemo.updated_at,
@@ -66,7 +65,8 @@ const transformMemoToBackend = (frontendMemo) => {
 
     return {
         title: frontendMemo.title || '',
-        content: fullContent,
+        content: fullContent
+        // 태그는 별도 API로 처리하므로 여기서 제외
     };
 };
 
@@ -82,8 +82,7 @@ function MemoMainPage() {
     const [newMemo, setNewMemo] = useState({
         title: '',
         content: '',
-        tags: '',
-        important: false
+        tags: ''
     });
     const [memos, setMemos] = useState([]);
     const contentEditableRef = useRef(null);
@@ -116,25 +115,79 @@ function MemoMainPage() {
     };
 
     const createMemo = async (memoData) => {
-        const backendData = transformMemoToBackend(memoData);
-        const response = await fetch(`${API_BASE_URL}/documents/`, {
-            method: 'POST',
-            headers: getHeaders(),
-            body: JSON.stringify(backendData),
-        });
-        const data = await handleResponse(response);
-        return transformMemoFromBackend(data);
+        try {
+            const backendData = transformMemoToBackend(memoData);
+            
+            // 1. 메모만 생성 (태그 없이)
+            const response = await fetch(`${API_BASE_URL}/documents/`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify(backendData),
+            });
+            const data = await handleResponse(response);
+            
+            // 2. 태그가 있으면 추가
+            if (memoData.tags && memoData.tags.length > 0) {
+                await addTagsToDocument(data.id, memoData.tags);
+            }
+            
+            // 3. 최종 메모 조회 (태그 포함)
+            const updatedResponse = await fetch(`${API_BASE_URL}/documents/${data.id}/`, {
+                method: 'GET',
+                headers: getHeaders(),
+            });
+            const updatedData = await handleResponse(updatedResponse);
+            return transformMemoFromBackend(updatedData);
+        } catch (err) {
+            console.error('Error in createMemo:', err);
+            throw err;
+        }
     };
 
     const updateMemo = async (id, memoData) => {
-        const backendData = transformMemoToBackend(memoData);
-        const response = await fetch(`${API_BASE_URL}/documents/${id}/`, {
-            method: 'PUT',
-            headers: getHeaders(),
-            body: JSON.stringify(backendData),
-        });
-        const data = await handleResponse(response);
-        return transformMemoFromBackend(data);
+        try {
+            const backendData = transformMemoToBackend(memoData);
+            
+            // 1. 메모 내용만 수정 (태그 없이)
+            const response = await fetch(`${API_BASE_URL}/documents/${id}/`, {
+                method: 'PUT',
+                headers: getHeaders(),
+                body: JSON.stringify(backendData),
+            });
+            await handleResponse(response);
+            
+            // 2. 현재 메모의 태그 정보 가져오기
+            const currentMemoResponse = await fetch(`${API_BASE_URL}/documents/${id}/`, {
+                method: 'GET',
+                headers: getHeaders(),
+            });
+            const currentMemoData = await handleResponse(currentMemoResponse);
+            const currentMemo = transformMemoFromBackend(currentMemoData);
+            
+            // 3. 기존 태그 모두 삭제
+            if (currentMemo.tags && currentMemo.tags.length > 0) {
+                const currentTagIds = await getTagIdsFromNames(currentMemo.tags);
+                for (const tagId of currentTagIds) {
+                    await removeTagFromDocument(id, tagId);
+                }
+            }
+            
+            // 4. 새 태그 추가
+            if (memoData.tags && memoData.tags.length > 0) {
+                await addTagsToDocument(id, memoData.tags);
+            }
+            
+            // 5. 최종 메모 조회
+            const updatedResponse = await fetch(`${API_BASE_URL}/documents/${id}/`, {
+                method: 'GET',
+                headers: getHeaders(),
+            });
+            const updatedData = await handleResponse(updatedResponse);
+            return transformMemoFromBackend(updatedData);
+        } catch (err) {
+            console.error('Error in updateMemo:', err);
+            throw err;
+        }
     };
 
     const deleteMemoAPI = async (id) => {
@@ -148,6 +201,118 @@ function MemoMainPage() {
         }
         return handleResponse(response);
     };
+// ============================================
+// 태그 관련 헬퍼 함수들 (최종 수정)
+// ============================================
+
+    const getOrCreateTagId = async (tagName) => {
+        try {
+            console.log('🔍 태그 조회/생성:', tagName);
+            
+            const response = await fetch(`${API_BASE_URL}/tags/`, {
+                method: 'GET',
+                headers: getHeaders(),
+            });
+            const tags = await handleResponse(response);
+            console.log('📋 전체 태그 목록:', tags);
+            
+            const existingTag = tags.find(t => t.tag_name === tagName);
+            if (existingTag) {
+                console.log('✅ 기존 태그 발견:', existingTag);
+                return existingTag.tag_id;
+            }
+            
+            console.log('➕ 새 태그 생성 중...');
+            const createResponse = await fetch(`${API_BASE_URL}/tags/`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({ tag_name: tagName }),
+            });
+            const newTag = await handleResponse(createResponse);
+            console.log('✅ 새 태그 생성 완료:', newTag);
+            return newTag.tag_id;
+        } catch (err) {
+            console.error('❌ 태그 조회/생성 실패:', tagName, err);
+            throw err;
+        }
+    };
+
+    const getTagIdsFromNames = async (tagNames) => {
+        try {
+            console.log('🔍 태그 이름으로 ID 조회:', tagNames);
+            const response = await fetch(`${API_BASE_URL}/tags/`, {
+                method: 'GET',
+                headers: getHeaders(),
+            });
+            const allTags = await handleResponse(response);
+            console.log('📋 조회된 전체 태그:', allTags);
+            
+            const tagIds = allTags
+                .filter(tag => tagNames.includes(tag.tag_name))
+                .map(tag => tag.tag_id);
+            
+            console.log('🔑 찾은 태그 ID들:', tagIds);
+            return tagIds;
+        } catch (err) {
+            console.error('❌ 태그 ID 조회 실패:', err);
+            return [];
+        }
+    };
+
+    const addTagsToDocument = async (docId, tagNames) => {
+        console.log(`📎 문서 ${docId}에 태그 추가 시작:`, tagNames);
+        for (const tagName of tagNames) {
+            try {
+                const tagId = await getOrCreateTagId(tagName);
+                console.log(`🔗 태그 "${tagName}" (ID: ${tagId}) 연결 중...`);
+                
+                if (tagId) {
+                    const response = await fetch(`${API_BASE_URL}/documents/${docId}/tags/`, {
+                        method: 'POST',
+                        headers: getHeaders(),
+                        body: JSON.stringify({ tag_id: tagId }),
+                    });
+                    
+                    console.log(`📤 POST 요청:`, {
+                        url: `${API_BASE_URL}/documents/${docId}/tags/`,
+                        body: { tag_id: tagId },
+                        status: response.status
+                    });
+                    
+                    const result = await handleResponse(response);
+                    console.log(`✅ 태그 "${tagName}" 연결 완료:`, result);
+                }
+            } catch (err) {
+                console.error(`❌ 태그 "${tagName}" 추가 실패:`, err);
+            }
+        }
+        console.log(`✅ 모든 태그 추가 완료`);
+    };
+
+    const removeTagFromDocument = async (docId, tagId) => {
+        try {
+            console.log(`🗑️ 문서 ${docId}에서 태그 ${tagId} 제거 중...`);
+            const response = await fetch(`${API_BASE_URL}/documents/${docId}/tags/${tagId}/`, {
+                method: 'DELETE',
+                headers: getHeaders(),
+            });
+            
+            console.log(`📤 DELETE 요청:`, {
+                url: `${API_BASE_URL}/documents/${docId}/tags/${tagId}/`,
+                status: response.status
+            });
+            
+            if (response.status === 204) {
+                console.log(`✅ 태그 ${tagId} 제거 완료`);
+                return;
+            }
+            
+            await handleResponse(response);
+        } catch (err) {
+            console.error('❌ 태그 제거 실패:', err);
+            throw err;
+        }
+    };
 
     // ============================================
     // 이벤트 핸들러
@@ -160,7 +325,6 @@ function MemoMainPage() {
                     title: quickInput,
                     content: '',
                     tags: [],
-                    important: false,
                     todos: []
                 };
                 const createdMemo = await createMemo(newMemoData);
@@ -190,20 +354,14 @@ function MemoMainPage() {
         }
     };
 
-    const toggleImportant = (id) => {
-        setMemos(memos.map(m => 
-            m.id === id ? { ...m, important: !m.important } : m
-        ));
-    };
-
     // 새 메모 작성 모달 열기
     const openCreateModal = () => {
         setEditingMemo(null);
-        setNewMemo({ title: '', content: '', tags: '', important: false });
+        setNewMemo({ title: '', content: '', tags: '' });
         setShowModal(true);
     };
 
-    // 메모 수정 모달 열기 (새로 추가!)
+    // 메모 수정 모달 열기
     const openEditModal = (memo) => {
         setEditingMemo(memo);
         
@@ -219,8 +377,7 @@ function MemoMainPage() {
         setNewMemo({
             title: memo.title,
             content: contentWithTodos,
-            tags: memo.tags.join(', '),
-            important: memo.important
+            tags: memo.tags.join(', ')
         });
         setShowModal(true);
     };
@@ -260,7 +417,6 @@ function MemoMainPage() {
             title: title,
             content: regularContent.join('\n'),
             tags: newMemo.tags.split(',').map(t => t.trim()).filter(t => t),
-            important: newMemo.important,
             todos: todos
         };
 
@@ -269,7 +425,7 @@ function MemoMainPage() {
             const createdMemo = await createMemo(memoData);
             setMemos([createdMemo, ...memos]);
             setShowModal(false);
-            setNewMemo({ title: '', content: '', tags: '', important: false });
+            setNewMemo({ title: '', content: '', tags: '' });
             setEditingMemo(null);
         } catch (err) {
             setError('메모 생성에 실패했습니다: ' + err.message);
@@ -279,7 +435,7 @@ function MemoMainPage() {
         }
     };
 
-    // 메모 수정 처리 (새로 추가!)
+    // 메모 수정 처리
     const handleUpdateMemo = async () => {
         let title = newMemo.title.trim();
         let content = newMemo.content;
@@ -315,7 +471,6 @@ function MemoMainPage() {
             title: title,
             content: regularContent.join('\n'),
             tags: newMemo.tags.split(',').map(t => t.trim()).filter(t => t),
-            important: newMemo.important,
             todos: todos
         };
 
@@ -324,7 +479,7 @@ function MemoMainPage() {
             const updatedMemo = await updateMemo(editingMemo.id, memoData);
             setMemos(memos.map(m => m.id === editingMemo.id ? updatedMemo : m));
             setShowModal(false);
-            setNewMemo({ title: '', content: '', tags: '', important: false });
+            setNewMemo({ title: '', content: '', tags: '' });
             setEditingMemo(null);
         } catch (err) {
             setError('메모 수정에 실패했습니다: ' + err.message);
@@ -425,12 +580,18 @@ function MemoMainPage() {
         }
     };
 
+    // "중요" 태그를 포함한 모든 태그 목록
     const allTags = memos.reduce((acc, memo) => {
         memo.tags.forEach(tag => {
             acc[tag] = (acc[tag] || 0) + 1;
         });
         return acc;
     }, {});
+
+    // "중요" 태그가 없으면 추가 (카운트 0으로)
+    if (!allTags['중요']) {
+        allTags['중요'] = 0;
+    }
 
     const filteredMemos = memos.filter(memo => {
         const matchesSearch = searchQuery === '' || 
@@ -443,6 +604,10 @@ function MemoMainPage() {
         return matchesSearch && matchesTags;
     });
 
+    // 중요 메모 필터링
+    const importantMemos = filteredMemos.filter(memo => memo.tags.includes('중요'));
+    const regularMemos = filteredMemos.filter(memo => !memo.tags.includes('중요'));
+
     const toggleTag = (tag) => {
         if (selectedTags.includes(tag)) {
             setSelectedTags(selectedTags.filter(t => t !== tag));
@@ -451,21 +616,58 @@ function MemoMainPage() {
         }
     };
 
-    const toggleTodo = (memoId, todoIndex) => {
-        setMemos(memos.map(m => {
-            if (m.id === memoId) {
-                const newTodos = [...m.todos];
-                newTodos[todoIndex] = {
-                    ...newTodos[todoIndex],
-                    completed: !newTodos[todoIndex].completed
-                };
-                return { ...m, todos: newTodos };
-            }
-            return m;
-        }));
+    const toggleTodo = async (memoId, todoIndex) => {
+        const memo = memos.find(m => m.id === memoId);
+        if (!memo) return;
+
+        const newTodos = [...memo.todos];
+        newTodos[todoIndex] = {
+            ...newTodos[todoIndex],
+            completed: !newTodos[todoIndex].completed
+        };
+
+        const updatedMemoData = {
+            ...memo,
+            todos: newTodos
+        };
+
+        try {
+            // 낙관적 업데이트 (즉시 UI 반영)
+            setMemos(memos.map(m => m.id === memoId ? updatedMemoData : m));
+            
+            // 백엔드 동기화
+            await updateMemo(memoId, updatedMemoData);
+        } catch (err) {
+            // 실패 시 원래대로 롤백
+            setMemos(memos.map(m => m.id === memoId ? memo : m));
+            setError('Todo 업데이트에 실패했습니다: ' + err.message);
+            console.error('Error toggling todo:', err);
+        }
     };
 
-    const MemoCard = ({ memo, showSection = 'all' }) => (
+    // "중요" 태그 토글 버튼
+    const toggleImportantTag = () => {
+        const currentTags = newMemo.tags.split(',').map(t => t.trim()).filter(t => t);
+        let newTags;
+        
+        if (currentTags.includes('중요')) {
+            // 중요 태그 제거
+            newTags = currentTags.filter(t => t !== '중요');
+        } else {
+            // 중요 태그 추가
+            newTags = [...currentTags, '중요'];
+        }
+        
+        setNewMemo({...newMemo, tags: newTags.join(', ')});
+    };
+
+    // 현재 "중요" 태그가 있는지 확인
+    const hasImportantTag = () => {
+        const currentTags = newMemo.tags.split(',').map(t => t.trim()).filter(t => t);
+        return currentTags.includes('중요');
+    };
+
+    const MemoCard = ({ memo }) => (
         <div 
             key={memo.id} 
             style={{
@@ -473,7 +675,7 @@ function MemoMainPage() {
                 borderRadius: '0.5rem',
                 padding: '1.5rem',
                 cursor: 'pointer',
-                border: showSection === 'important' ? '1px solid #f59e0b' : '1px solid #3d3d3d',
+                border: memo.tags.includes('중요') ? '2px solid #f59e0b' : '1px solid #3d3d3d',
                 transition: 'transform 0.2s',
                 position: 'relative'
             }}
@@ -483,25 +685,9 @@ function MemoMainPage() {
         >
             <div style={{
                 position: 'absolute',
-                top: '0.3rem',
-                right: '0.5rem',
-                display: 'flex',
-                gap: '0.25rem'
+                top: '0.5rem',
+                right: '0.5rem'
             }}>
-                <button
-                    onClick={(e) => {
-                        e.stopPropagation();
-                        toggleImportant(memo.id);
-                    }}
-                    style={{
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        fontSize: '1.2rem',
-                        padding: '0.25rem',
-                        opacity: memo.important ? 1 : 0.3
-                    }}
-                >⭐</button>
                 <button
                     onClick={(e) => {
                         e.stopPropagation();
@@ -521,7 +707,7 @@ function MemoMainPage() {
                 fontSize: '1.1rem',
                 fontWeight: '600',
                 marginBottom: '0.5rem',
-                paddingRight: '3rem'
+                paddingRight: '2rem'
             }}>{memo.title}</h3>
             {memo.content && (
                 <div style={{
@@ -573,8 +759,8 @@ function MemoMainPage() {
                 {memo.tags.map((tag, idx) => (
                     <span key={idx} style={{
                         padding: '0.25rem 0.5rem',
-                        backgroundColor: '#374151',
-                        color: '#e5e5e5',
+                        backgroundColor: tag === '중요' ? '#f59e0b' : '#374151',
+                        color: tag === '중요' ? '#000' : '#e5e5e5',
                         borderRadius: '0.25rem',
                         fontSize: '0.75rem',
                         fontWeight: '600'
@@ -696,10 +882,11 @@ function MemoMainPage() {
                                             padding: '0.5rem',
                                             cursor: 'pointer',
                                             borderRadius: '0.25rem',
-                                            transition: 'background 0.2s'
+                                            transition: 'background 0.2s',
+                                            backgroundColor: tag === '중요' ? 'rgba(245, 158, 11, 0.1)' : 'transparent'
                                         }}
-                                        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#374151'}
-                                        onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                        onMouseOver={(e) => e.currentTarget.style.backgroundColor = tag === '중요' ? 'rgba(245, 158, 11, 0.2)' : '#374151'}
+                                        onMouseOut={(e) => e.currentTarget.style.backgroundColor = tag === '중요' ? 'rgba(245, 158, 11, 0.1)' : 'transparent'}
                                         >
                                             <input
                                                 type="checkbox"
@@ -712,11 +899,18 @@ function MemoMainPage() {
                                                     cursor: 'pointer'
                                                 }}
                                             />
-                                            <span style={{ flex: 1, fontSize: '0.9rem' }}>#{tag}</span>
+                                            <span style={{ 
+                                                flex: 1, 
+                                                fontSize: '0.9rem',
+                                                color: tag === '중요' ? '#f59e0b' : '#fff',
+                                                fontWeight: tag === '중요' ? '600' : 'normal'
+                                            }}>
+                                                {tag === '중요' ? '⭐ ' : '#'}{tag}
+                                            </span>
                                             <span style={{
                                                 fontSize: '0.75rem',
-                                                color: '#9ca3af',
-                                                backgroundColor: '#374151',
+                                                backgroundColor: tag === '중요' ? '#f59e0b' : '#374151',
+                                                color: tag === '중요' ? '#000' : '#9ca3af',
                                                 padding: '0.125rem 0.5rem',
                                                 borderRadius: '0.25rem'
                                             }}>
@@ -808,23 +1002,28 @@ function MemoMainPage() {
                     />
                 </div>
 
-                <div style={{ marginBottom: '2rem' }}>
-                    <h2 style={{
-                        fontSize: '1.25rem',
-                        fontWeight: '600',
-                        marginBottom: '1rem',
-                        color: '#f59e0b'
-                    }}>📌 중요 메모</h2>
-                    <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-                        gap: '1.5rem'
-                    }}>
-                        {filteredMemos.filter(m => m.important).map(memo => (
-                            <MemoCard key={memo.id} memo={memo} showSection="important" />
-                        ))}
+                {importantMemos.length > 0 && (
+                    <div style={{ marginBottom: '2rem' }}>
+                        <h2 style={{
+                            fontSize: '1.25rem',
+                            fontWeight: '600',
+                            marginBottom: '1rem',
+                            color: '#f59e0b',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem'
+                        }}>⭐ 중요 메모</h2>
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                            gap: '1.5rem'
+                        }}>
+                            {importantMemos.map(memo => (
+                                <MemoCard key={memo.id} memo={memo} />
+                            ))}
+                        </div>
                     </div>
-                </div>
+                )}
 
                 <div>
                     <h2 style={{
@@ -837,8 +1036,8 @@ function MemoMainPage() {
                         gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
                         gap: '1.5rem'
                     }}>
-                        {filteredMemos.map(memo => (
-                            <MemoCard key={memo.id} memo={memo} showSection="all" />
+                        {regularMemos.map(memo => (
+                            <MemoCard key={memo.id} memo={memo} />
                         ))}
                     </div>
                 </div>
@@ -1122,26 +1321,33 @@ function MemoMainPage() {
                         </div>
 
                         <div style={{ marginBottom: '1.5rem' }}>
-                            <label style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                color: '#d1d5db',
-                                fontSize: '0.9rem',
-                                cursor: 'pointer'
-                            }}>
-                                <input
-                                    type="checkbox"
-                                    checked={newMemo.important}
-                                    onChange={(e) => setNewMemo({...newMemo, important: e.target.checked})}
-                                    style={{
-                                        marginRight: '0.5rem',
-                                        width: '1.2rem',
-                                        height: '1.2rem',
-                                        cursor: 'pointer'
-                                    }}
-                                />
-                                ⭐ 중요 메모로 표시
-                            </label>
+                            <button
+                                type="button"
+                                onClick={toggleImportantTag}
+                                style={{
+                                    padding: '0.75rem 1.5rem',
+                                    backgroundColor: hasImportantTag() ? '#f59e0b' : '#374151',
+                                    color: hasImportantTag() ? '#000' : '#fff',
+                                    border: 'none',
+                                    borderRadius: '0.5rem',
+                                    cursor: 'pointer',
+                                    fontSize: '1rem',
+                                    fontWeight: '600',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem',
+                                    transition: 'all 0.2s'
+                                }}
+                                onMouseOver={(e) => {
+                                    e.currentTarget.style.transform = 'scale(1.02)';
+                                }}
+                                onMouseOut={(e) => {
+                                    e.currentTarget.style.transform = 'scale(1)';
+                                }}
+                            >
+                                <span>{hasImportantTag() ? '⭐' : '☆'}</span>
+                                {hasImportantTag() ? '중요 메모 해제' : '중요 메모로 표시'}
+                            </button>
                         </div>
 
                         <div style={{
@@ -1152,7 +1358,7 @@ function MemoMainPage() {
                             <button
                                 onClick={() => {
                                     setShowModal(false);
-                                    setNewMemo({ title: '', content: '', tags: '', important: false });
+                                    setNewMemo({ title: '', content: '', tags: '' });
                                     setEditingMemo(null);
                                 }}
                                 style={{
