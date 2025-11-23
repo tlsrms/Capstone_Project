@@ -32,5 +32,8 @@ class TextDocument(models.Model):
     # 실제 파일 저장 필드
     uploaded_file = models.FileField(upload_to='documents/%Y/%m/%d/', blank=True, null=True)
     
+    sender = models.CharField(max_length=500, blank=True, null=True)
+    email_date = models.CharField(max_length=200, blank=True, null=True)
+    
     def __str__(self):
         return self.title

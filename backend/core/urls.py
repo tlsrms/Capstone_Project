@@ -63,4 +63,12 @@ urlpatterns = [
     path("persona/", 
          PersonaAnalysisView.as_view(), 
          name="persona-analysis"),
+
+    path('sync-gmail/', 
+         views.sync_gmail_to_documents, 
+         name='sync-gmail'),
+
+    path('gmail/<str:message_id>/', 
+         views.gmail_message_detail, 
+         name='gmail-detail'),
 ]
