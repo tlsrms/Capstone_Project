@@ -26,7 +26,7 @@ from .ai_client import analyze_text_with_ai
 
 
 # --------------------
-# È¸¿ø°¡ÀÔ / ·Î±×ÀÎ / ³» Á¤º¸
+# íšŒì›ê°€ì… / ë¡œê·¸ì¸ / ë‚´ ì •ë³´
 # --------------------
 
 class RegisterView(APIView):
@@ -77,13 +77,13 @@ class MeView(APIView):
 
 
 # --------------------
-# Gmail ¿¬µ¿ (¸ñ·Ï / »ó¼¼ / ºĞ¼®)
+# Gmail ì—°ë™ (ëª©ë¡ / ìƒì„¸ / ë¶„ì„)
 # --------------------
 
 class GmailMessageDetailView(APIView):
     """
     GET /api/auth/gmail/messages/<message_id>/
-    Gmail ¸ŞÀÏ ÇÑ °³ÀÇ ÀüÃ¼ ³»¿ë °¡Á®¿À±â
+    Gmail ë©”ì¼ í•œ ê°œì˜ ì „ì²´ ë‚´ìš© ê°€ì ¸ì˜¤ê¸°
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -101,7 +101,7 @@ class GmailMessageDetailView(APIView):
 class GmailMessageAnalyzeView(APIView):
     """
     POST /api/auth/gmail/messages/<message_id>/analyze/
-    Gmail ¸ŞÀÏ(Á¦¸ñ + º»¹®)À» AI ¿£ÁøÀ¸·Î ºĞ¼®ÇÏ±â
+    Gmail ë©”ì¼(ì œëª© + ë³¸ë¬¸)ì„ AI ì—”ì§„ìœ¼ë¡œ ë¶„ì„í•˜ê¸°
     """
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -109,7 +109,7 @@ class GmailMessageAnalyzeView(APIView):
     def post(self, request, message_id):
         user = request.user
 
-        # 1) Gmail ¸Ş½ÃÁö °¡Á®¿À±â
+        # 1) Gmail ë©”ì‹œì§€ ê°€ì ¸ì˜¤ê¸°
         try:
             msg = get_message_detail_for_user(user, message_id)
         except Exception as e:
@@ -118,7 +118,7 @@ class GmailMessageAnalyzeView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # 2) Á¦¸ñ + º»¹® ÃßÃâ
+        # 2) ì œëª© + ë³¸ë¬¸ ì¶”ì¶œ
         subject, body_text = extract_subject_and_body(msg)
 
         if not body_text:
@@ -127,7 +127,7 @@ class GmailMessageAnalyzeView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 3) º»¹® ±æÀÌ Á¦ÇÑ (Áß¿ä!)
+        # 3) ë³¸ë¬¸ ê¸¸ì´ ì œí•œ (ì¤‘ìš”!)
         MAX_BODY_LENGTH = 2000
         original_length = len(body_text)
         
@@ -135,7 +135,7 @@ class GmailMessageAnalyzeView(APIView):
             body_text = body_text[:MAX_BODY_LENGTH]
             print(f"[Analyze] Truncated: {original_length} -> {MAX_BODY_LENGTH}")
 
-        # 4) ÇÁ·ÒÇÁÆ® ÀÛ¼º
+        # 4) í”„ë¡¬í”„íŠ¸ ì‘ì„±
         prompt = (
             f"Summarize this email in 3-5 bullet points.\n\n"
             f"Subject: {subject}\n\n"
@@ -143,7 +143,7 @@ class GmailMessageAnalyzeView(APIView):
             f"Summary:"
         )
 
-        # 5) AI È£Ãâ
+        # 5) AI í˜¸ì¶œ
         try:
             print(f"[Analyze] Calling AI for message {message_id}")
             analysis = analyze_text_with_ai(prompt, timeout=300)
@@ -155,7 +155,7 @@ class GmailMessageAnalyzeView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # 6) °á°ú ¹İÈ¯
+        # 6) ê²°ê³¼ ë°˜í™˜
         return Response(
             {
                 "subject": subject,
@@ -166,13 +166,13 @@ class GmailMessageAnalyzeView(APIView):
             status=status.HTTP_200_OK,
         )
 # --------------------
-# Google ·Î±×ÀÎ (id_token ¹æ½Ä - ÇÁ·ĞÆ®¿¡¼­ id_token º¸³»´Â °æ¿ì)
+# Google ë¡œê·¸ì¸ (id_token ë°©ì‹ - í”„ë¡ íŠ¸ì—ì„œ id_token ë³´ë‚´ëŠ” ê²½ìš°)
 # --------------------
 
 class GoogleLoginView(APIView):
     """
     POST /api/auth/google/
-    ÇÁ·ĞÆ®¿¡¼­ Google id_tokenÀ» º¸³»ÁÖ´Â ¹æ½ÄÀÇ ·Î±×ÀÎ
+    í”„ë¡ íŠ¸ì—ì„œ Google id_tokenì„ ë³´ë‚´ì£¼ëŠ” ë°©ì‹ì˜ ë¡œê·¸ì¸
     """
     permission_classes = [permissions.AllowAny]
 
@@ -186,19 +186,19 @@ class GoogleLoginView(APIView):
             )
 
         try:
-            # Google¿¡¼­ id_token °ËÁõ
+            # Googleì—ì„œ id_token ê²€ì¦
             idinfo = id_token.verify_oauth2_token(
                 token,
                 grequests.Request(),
-                settings.GOOGLE_OAUTH_CLIENT_ID,  # settings.py¿¡ ÀÖ´Â °ª »ç¿ë
+                settings.GOOGLE_OAUTH_CLIENT_ID,  # settings.pyì— ìˆëŠ” ê°’ ì‚¬ìš©
             )
 
             email = idinfo.get("email")
 
-            # ¿ì¸® ¼­ºñ½º À¯Àú Ã£±â or »ı¼º
+            # ìš°ë¦¬ ì„œë¹„ìŠ¤ ìœ ì € ì°¾ê¸° or ìƒì„±
             user, created = CustomUser.objects.get_or_create(email=email)
 
-            # JWT ¹ß±Ş
+            # JWT ë°œê¸‰
             refresh = RefreshToken.for_user(user)
 
             return Response(
@@ -218,13 +218,13 @@ class GoogleLoginView(APIView):
 
 
 # --------------------
-# Google OAuth ¼­¹ö ¸®´ÙÀÌ·ºÆ® ¹æ½Ä (login / callback)
+# Google OAuth ì„œë²„ ë¦¬ë‹¤ì´ë ‰íŠ¸ ë°©ì‹ (login / callback)
 # --------------------
 
 def google_login(request):
     """
     GET /api/auth/google/login/
-    Google ·Î±×ÀÎ ÆäÀÌÁö·Î ¸®´ÙÀÌ·ºÆ® ½ÃÄÑÁÖ´Â ¿£µåÆ÷ÀÎÆ®
+    Google ë¡œê·¸ì¸ í˜ì´ì§€ë¡œ ë¦¬ë‹¤ì´ë ‰íŠ¸ ì‹œì¼œì£¼ëŠ” ì—”ë“œí¬ì¸íŠ¸
     """
     flow = create_google_flow()
     authorization_url, state = flow.authorization_url(
@@ -233,7 +233,7 @@ def google_login(request):
         prompt="consent",
     )
 
-    # CSRF ¹æÁö¸¦ À§ÇØ state¸¦ ¼¼¼Ç¿¡ ÀúÀå
+    # CSRF ë°©ì§€ë¥¼ ìœ„í•´ stateë¥¼ ì„¸ì…˜ì— ì €ì¥
     request.session["google_auth_state"] = state
 
     return redirect(authorization_url)
@@ -242,21 +242,21 @@ def google_login(request):
 def google_callback(request):
     """
     GET /api/auth/google/callback/
-    GoogleÀÌ ¸®´ÙÀÌ·ºÆ®ÇØÁÖ´Â Äİ¹é URL.
-    ¿©±â¼­ ÅäÅ« ±³È¯ + À¯Àú »ı¼º/Á¶È¸ + JWT ¹ß±Ş±îÁö Ã³¸®ÇÏ°í JSONÀ¸·Î ÀÀ´ä.
+    Googleì´ ë¦¬ë‹¤ì´ë ‰íŠ¸í•´ì£¼ëŠ” ì½œë°± URL.
+    ì—¬ê¸°ì„œ í† í° êµí™˜ + ìœ ì € ìƒì„±/ì¡°íšŒ + JWT ë°œê¸‰ê¹Œì§€ ì²˜ë¦¬í•˜ê³  JSONìœ¼ë¡œ ì‘ë‹µ.
     """
     try:
-        # ÀüÃ¼ Äİ¹é URL (code, state Æ÷ÇÔ)
+        # ì „ì²´ ì½œë°± URL (code, state í¬í•¨)
         authorization_response = request.build_absolute_uri()
 
-        # Google OAuth Flow »ı¼º
+        # Google OAuth Flow ìƒì„±
         flow = create_google_flow()
 
-        # authorization code ¡æ access/refresh token ±³È¯
+        # authorization code â†’ access/refresh token êµí™˜
         flow.fetch_token(authorization_response=authorization_response)
-        credentials = flow.credentials  # access_token, refresh_token, id_token µî
+        credentials = flow.credentials  # access_token, refresh_token, id_token ë“±
 
-        # id_token °ËÁõÇØ¼­ ±¸±Û °èÁ¤ Á¤º¸ ¾ò±â
+        # id_token ê²€ì¦í•´ì„œ êµ¬ê¸€ ê³„ì • ì •ë³´ ì–»ê¸°
         id_info = id_token.verify_oauth2_token(
             credentials.id_token,
             grequests.Request(),
@@ -264,20 +264,20 @@ def google_callback(request):
         )
         email = id_info["email"]
 
-        # ¿ì¸® ¼­ºñ½º À¯Àú »ı¼º or Á¶È¸
+        # ìš°ë¦¬ ì„œë¹„ìŠ¤ ìœ ì € ìƒì„± or ì¡°íšŒ
         user, is_new_user = CustomUser.objects.get_or_create(email=email)
 
-        # Gmail¿ë refresh_token ÀÖÀ¸¸é À¯Àú¿¡ ÀúÀå (CustomUser¿¡ ÇÊµå ÀÖ´Ù°í °¡Á¤)
+        # Gmailìš© refresh_token ìˆìœ¼ë©´ ìœ ì €ì— ì €ì¥ (CustomUserì— í•„ë“œ ìˆë‹¤ê³  ê°€ì •)
         refresh_token_google = credentials.refresh_token
         if refresh_token_google:
             user.gmail_refresh_token = refresh_token_google
             user.save()
 
-        # ¿ì¸® ¼­ºñ½º¿ë JWT ¹ß±Ş
+        # ìš°ë¦¬ ì„œë¹„ìŠ¤ìš© JWT ë°œê¸‰
         refresh = RefreshToken.for_user(user)
         access = refresh.access_token
 
-        # ÇÁ·ĞÆ®·Î redirect ´ë½Å JSONÀ¸·Î ÀÀ´ä
+        # í”„ë¡ íŠ¸ë¡œ redirect ëŒ€ì‹  JSONìœ¼ë¡œ ì‘ë‹µ
         return JsonResponse(
             {
                 "message": "google oauth callback ok (Gmail scope included)",
