@@ -118,3 +118,21 @@ class DocumentSerializer(serializers.ModelSerializer):
             "type_label": type_label, # 예: "PlanningDocument"
             "relations": relations
         }
+
+class BookmarkUploadSerializer(serializers.Serializer):
+    file = serializers.FileField()
+
+    def validate_file(self, f):
+        # 간단한 확장자 / content_type 체크 (원하면 더 강화)
+        filename = f.name.lower()
+
+        if not filename.endswith(".html") and not filename.endswith(".htm"):
+            raise serializers.ValidationError("HTML 형식의 북마크 파일(.html)이 필요합니다.")
+
+        # content_type은 브라우저/클라이언트에 따라 다를 수 있어서 너무 강하게 제한하진 않음
+        return f
+
+class UrlListSerializer(serializers.Serializer):
+    urls = serializers.ListField(
+        child=serializers.URLField(), allow_empty=False
+    )
