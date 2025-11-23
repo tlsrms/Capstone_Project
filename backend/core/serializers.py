@@ -34,6 +34,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'author_email', 'title', 'content', 
             'file_path',
+            'uploaded_file',
             'tags', 
             'created_at', 'updated_at', 
             'summary',
