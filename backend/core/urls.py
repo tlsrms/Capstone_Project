@@ -1,7 +1,8 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
-from .views import PersonaAnalysisView  # 위치에 맞게 import
+from .views import PersonaAnalysisView, BookmarkImportView
+
 
 router = DefaultRouter()
 
@@ -55,6 +56,8 @@ urlpatterns = [
         views.SearchView.as_view(), 
         name='search'
     ),
+    
+    path("bookmarks/import/", BookmarkImportView.as_view(), name="bookmark-import")
 ]
 
 urlpatterns += [
