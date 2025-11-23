@@ -80,31 +80,6 @@ class MeView(APIView):
 # Gmail 연동 (목록 / 상세 / 분석)
 # --------------------
 
-class GmailMessageListView(APIView):
-    """
-    GET /api/auth/gmail/messages/?label=INBOX&max=10
-    로그인한 사용자의 Gmail 메일 목록 가져오기
-    """
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        label = request.GET.get("label", "INBOX")
-        max_results = int(request.GET.get("max", 10))
-        user = request.user
-
-        try:
-            messages = list_messages_for_user(
-                user=user,
-                label_ids=[label],
-                max_results=max_results,
-            )
-        except Exception as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response({"messages": messages}, status=status.HTTP_200_OK)
-
-
 class GmailMessageDetailView(APIView):
     """
     GET /api/auth/gmail/messages/<message_id>/
@@ -295,7 +270,7 @@ def google_callback(request):
         # Gmail용 refresh_token 있으면 유저에 저장 (CustomUser에 필드 있다고 가정)
         refresh_token_google = credentials.refresh_token
         if refresh_token_google:
-            user.google_refresh_token = refresh_token_google
+            user.gmail_refresh_token = refresh_token_google
             user.save()
 
         # 우리 서비스용 JWT 발급

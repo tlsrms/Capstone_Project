@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 
 def get_gmail_service_for_user(user):
 
-    refresh_token = user.google_refresh_token  # ← 여기 꼭 이 이름으로!
+    refresh_token = user.gmail_refresh_token  # ← 여기 꼭 이 이름으로!
 
     if not refresh_token:
         raise Exception("Gmail token not found. User must re-authenticate.")

@@ -1,3 +1,5 @@
+# core/models.py
+
 from django.db import models
 from django.conf import settings
 
@@ -20,17 +22,18 @@ class TextDocument(models.Model):
 
     tags = models.ManyToManyField(
         Tag,
-        related_name='documents', # (Tag 입장에서 문서를 부를 때: tag.documents.all())
+        related_name='documents',
         blank=True
     )
 
     is_organized = models.BooleanField(default=False)
-    summary = models.TextField(blank=True, default='') # AI 요약본
-
-    file_path = models.CharField(max_length=1024, blank=True, db_index=True) # (파편화/깊이 계산)을 위한 file_path 필드
-
-    # 실제 파일 저장 필드
+    summary = models.TextField(blank=True, default='')
+    file_path = models.CharField(max_length=1024, blank=True, db_index=True)
     uploaded_file = models.FileField(upload_to='documents/%Y/%m/%d/', blank=True, null=True)
+    
+    # ✨ 여기 2줄 추가!
+    sender = models.CharField(max_length=500, blank=True, null=True)
+    email_date = models.CharField(max_length=200, blank=True, null=True)
     
     def __str__(self):
         return self.title

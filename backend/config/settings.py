@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
+    'django_apscheduler',
     'django.contrib.staticfiles',
 
     # 1. 도구
@@ -138,7 +139,6 @@ AUTH_USER_MODEL = 'users.CustomUser'
 # "일단 개발 중이니, 모든 주소에서 오는 요청을 다 허용" (CORS)
 CORS_ALLOW_ALL_ORIGINS = True
 
-GOOGLE_OAUTH_CLIENT_ID = "644535033601-kv8h052g252hpu14se2tblo3htu5t5c4.apps.googleusercontent.com"
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -153,9 +153,31 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",), 
 }
 
-#파일 업로드(Media) 설정
+# 파일 업로드(Media) 설정
 # 웹에서 접근할 URL (예: http://localhost:8000/media/파일.jpg)
 MEDIA_URL = '/media/'
 
 # 실제 파일이 저장될 서버 내 경로 (backend/media 폴더)
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Google OAuth 설정
+GOOGLE_OAUTH_CLIENT_ID = "644535033601-kv8h052g252hpu14se2tblo3htu5t5c4.apps.googleusercontent.com"
+GOOGLE_OAUTH_CLIENT_SECRET = "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" 
+GOOGLE_OAUTH2_REDIRECT_URI = 'http://localhost:8000/api/auth/google/callback/'
+
+# Google OAuth Scopes
+GOOGLE_OAUTH2_SCOPES = [
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/gmail.readonly',
+]
+
+# Ollama AI 설정
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL_NAME = "llama3"
+
+# Frontend URL
+FRONTEND_URL = 'http://localhost:3000'
+APSCHEDULER_DATETIME_FORMAT = "N j, Y, f:s a"
+APSCHEDULER_RUN_NOW_TIMEOUT = 25
