@@ -7,18 +7,23 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication 
+from rest_framework.parsers import MultiPartParser, FormParser
 from django.shortcuts import get_object_or_404
 from .models import TextDocument, Tag
-from .serializers import DocumentSerializer, TagSerializer
+from .serializers import DocumentSerializer, TagSerializer, BookmarkUploadSerializer
 
 import os 
 from django.db.models import Q
-from analytics.metrics import compute_cleanliness, calculate_fragmentation, build_category_distribution
-from analytics.personas import load_persona_rules, score_personas
+from utils.metrics import compute_cleanliness, calculate_fragmentation, build_category_distribution
+from utils.personas import load_persona_rules, score_personas
 
 from collections import defaultdict, Counter 
 
 from .extractors import TextExtractor
+
+from utils.bookmarks_parser import extract_bookmarks_from_html
+from .serializers import UrlListSerializer
+from utils.web_scraper import scrape_url
 
 class DocumentViewSet(viewsets.ModelViewSet): 
     """
@@ -465,7 +470,7 @@ class NeatnessScoreView(APIView):
         # 1. RDB 데이터 조회
         user_docs_qs = TextDocument.objects.filter(
             author=user, file_path__isnull=False
-        ).exclude(file_path="")
+        ).exclude(file_path="").exclude(file_path__startswith="http")
         
         user_docs_map = {doc.id: doc for doc in user_docs_qs}
         total_files = len(user_docs_map)
@@ -1144,4 +1149,107 @@ class SearchView(APIView):
             "count": len(search_results),
             "results": search_results
         }, status=status.HTTP_200_OK)
+
+# ---------------------------------------------------
+# 3.1 BE: 북마크 API 뷰
+# ---------------------------------------------------
+class BookmarkImportView(APIView):
+    """
+    북마크 HTML 업로드 -> URL 스크레이핑 -> TextDocument 자동 생성
+    POST /api/bookmarks/import/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    # 한 번에 너무 많이 긁지 않도록 안전 장치 (원하면 늘릴 수 있음)
+    MAX_BOOKMARKS = 50
+
+    def post(self, request):
+        # 1) 파일 검증
+        s = BookmarkUploadSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        upload_file = s.validated_data["file"]
+
+        # 2) 북마크 HTML → URL/제목 리스트 추출
+        bookmarks = extract_bookmarks_from_html(upload_file)
+        total_in_file = len(bookmarks)
+
+        if total_in_file == 0:
+            return Response(
+                {
+                    "original_filename": upload_file.name,
+                    "total_bookmarks_in_file": 0,
+                    "processed": 0,
+                    "created_documents": [],
+                    "failed": [],
+                    "message": "북마크 파일에서 URL을 찾지 못했습니다.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # 3) 너무 많으면 앞에서부터 MAX_BOOKMARKS까지만 처리
+        bookmarks_to_process = bookmarks[: self.MAX_BOOKMARKS]
+
+        created_docs_info = []
+        failed_list = []
+
+        user = request.user
+
+        for item in bookmarks_to_process:
+            url = item.get("url")
+            bm_title = item.get("title") or ""
+
+            # 3-1) URL 스크레이핑 시도
+            scraped = scrape_url(url)
+            if scraped is None or not scraped.get("text"):
+                failed_list.append(
+                    {
+                        "url": url,
+                        "reason": "fetch_failed_or_empty",
+                    }
+                )
+                continue
+
+            page_title = scraped.get("title") or ""
+            text = scraped.get("text") or ""
+
+            # 3-2) 최종 문서 제목 결정
+            # 우선순위: 페이지 title > 북마크 title > URL 자체
+            final_title = page_title or bm_title or url
+
+            # 3-3) TextDocument 생성
+            doc = TextDocument.objects.create(
+                author=user,
+                title=final_title[:200],   # CharField max_length=200
+                content=text,
+                is_organized=False,
+                summary="",
+                file_path=url,
+                uploaded_file=None,        # 업로드 파일 없음
+            )
+
+            created_docs_info.append(
+                {
+                    "id": doc.id,
+                    "title": doc.title,
+                    "url": url,
+                    "created_at": doc.created_at.isoformat(),
+                }
+            )
+
+        return Response(
+            {
+                "original_filename": upload_file.name,
+                "total_bookmarks_in_file": total_in_file,
+                "processed": len(bookmarks_to_process),
+                "created_count": len(created_docs_info),
+                "created_documents": created_docs_info,
+                "failed": failed_list,
+                "note": (
+                    "processed는 실제로 처리 시도한 북마크 수입니다. "
+                    f"최대 {self.MAX_BOOKMARKS}개까지만 처리하도록 제한되어 있습니다."
+                ),
+            },
+            status=status.HTTP_200_OK,
+        )
 

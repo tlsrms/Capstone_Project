@@ -50,7 +50,7 @@ def compute_cleanliness(
 def calculate_fragmentation(user: CustomUser) -> (int, set): 
     """
     R_frag (파편화) 지표를 계산합니다: sum(n_g - m_g)
-    (수정) 파편화된 파일의 ID 목록(set)도 함께 반환합니다.
+    파편화된 파일의 ID 목록(set)도 함께 반환합니다.
     """
     SCHEMA_URI = "http://api.sseukssak.com/ontology#"
     FUSEKI_QUERY_ENDPOINT = "http://localhost:3030/sseukssak/query"
@@ -88,7 +88,7 @@ def calculate_fragmentation(user: CustomUser) -> (int, set):
         for doc in TextDocument.objects.filter(
             author=user, 
             id__in=doc_id_to_type.keys()
-        ).only("id", "file_path")
+        ).exclude(file_path__startswith="http").only("id", "file_path")
     }
 
     # 3. '주제 그룹(g)'별로 '(폴더, doc_id)' 튜플 리스트 생성
