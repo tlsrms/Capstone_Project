@@ -1,6 +1,7 @@
 import os
 import base64  
 import requests
+from django.conf import settings
 from pypdf import PdfReader
 from docx import Document as DocxDocument
 from PIL import Image
@@ -101,7 +102,7 @@ class TextExtractor:
         """
 
         payload = {
-            "model": "gemma3:4b", 
+            "model": settings.OLLAMA_MODEL_NAME, 
             "prompt": prompt_text,
             "images": [base64_image], 
             "stream": False,

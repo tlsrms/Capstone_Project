@@ -175,10 +175,10 @@ GOOGLE_OAUTH2_SCOPES = [
 ]
 
 # # Ollama AI 설정
-# OLLAMA_BASE_URL = "http://localhost:11434"
-# OLLAMA_MODEL_NAME = "llama3"
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL_NAME = "gemma3:4b"
 
 # # Frontend URL
-# FRONTEND_URL = 'http://localhost:3000'
-# APSCHEDULER_DATETIME_FORMAT = "N j, Y, f:s a"
-# APSCHEDULER_RUN_NOW_TIMEOUT = 25
+FRONTEND_URL = 'http://localhost:3000'
+APSCHEDULER_DATETIME_FORMAT = "N j, Y, f:s a"
+APSCHEDULER_RUN_NOW_TIMEOUT = 25

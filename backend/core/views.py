@@ -1,5 +1,6 @@
 import requests 
-import json      
+import json  
+from django.conf import settings
 from SPARQLWrapper import SPARQLWrapper, POST, JSON
 
 from rest_framework import viewsets, mixins, status
@@ -273,7 +274,8 @@ Format: [ ["predicate_uri", "object_string"], ... ]
 }}
 """
 
-    def call_ollama(self, prompt, model_name="gemma3:4b"):
+    def call_ollama(self, prompt, model_name=None):
+        model_name = model_name or settings.OLLAMA_MODEL_NAME
         """
         Ollama 서버(2.1)에 API 요청을 보내고 3-Key JSON을 파싱합니다.
         """
