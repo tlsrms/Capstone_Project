@@ -97,7 +97,7 @@ class GmailMessageDetailView(APIView):
 
         return Response(msg, status=status.HTTP_200_OK)
 
-
+''' 필요없는거 같은디
 class GmailMessageAnalyzeView(APIView):
     """
     POST /api/auth/gmail/messages/<message_id>/analyze/
@@ -165,10 +165,12 @@ class GmailMessageAnalyzeView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+'''
+        
+        
 # --------------------
 # Google 로그인 (id_token 방식 - 프론트에서 id_token 보내는 경우)
 # --------------------
-
 class GoogleLoginView(APIView):
     """
     POST /api/auth/google/
@@ -220,7 +222,6 @@ class GoogleLoginView(APIView):
 # --------------------
 # Google OAuth 서버 리다이렉트 방식 (login / callback)
 # --------------------
-
 def google_login(request):
     """
     GET /api/auth/google/login/

@@ -38,13 +38,15 @@ class DocumentSerializer(serializers.ModelSerializer):
             'tags', 
             'created_at', 'updated_at', 
             'summary',
-            'semantic_details'
+            'semantic_details',
+            'sender', 
+            'email_date'
         ]
         
         # read_only_fields에서 'file_path' 제거
         read_only_fields = [
             'id', 'author_email', 'created_at', 'updated_at', 'tags',
-            'summary', 'semantic_details'
+            'summary', 'semantic_details', 'sender', 'email_date'
         ]
         
         # 'file_path'는 쓰기(POST/PATCH)는 가능하지만, 필수는 아님
