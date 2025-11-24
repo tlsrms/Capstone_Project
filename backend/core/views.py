@@ -47,7 +47,31 @@ class DocumentViewSet(viewsets.ModelViewSet):
     SCHEMA_URI = "http://api.sseukssak.com/ontology#"
 
     def get_queryset(self):
-        return TextDocument.objects.filter(author=self.request.user).order_by('-created_at')
+        queryset = TextDocument.objects.filter(author=self.request.user).order_by('-created_at')
+        
+        # 쿼리 파라미터로 필터링 (?type=memo)
+        doc_type = self.request.query_params.get('type')
+        
+        if doc_type == 'memo':
+            # 메모: 파일도 없고, 링크도 아니고, 이메일도 아닌 것
+            queryset = queryset.filter(
+                uploaded_file='', 
+                sender__isnull=True
+            ).exclude(file_path__startswith='http')
+            
+        elif doc_type == 'file':
+            # 파일: 업로드된 파일이 있는 것
+            queryset = queryset.filter(uploaded_file__isnull=False).exclude(uploaded_file='')
+            
+        elif doc_type == 'link':
+            # 링크: file_path가 http로 시작하는 것
+            queryset = queryset.filter(file_path__startswith='http')
+            
+        elif doc_type == 'email':
+            # 이메일: sender가 있는 것
+            queryset = queryset.filter(sender__isnull=False)
+
+        return queryset
 
     # Fuseki 데이터 삭제 헬퍼 함수
     def _delete_fuseki_data(self, doc_id):
