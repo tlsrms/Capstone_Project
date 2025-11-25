@@ -667,7 +667,6 @@ class DashboardView(APIView):
     }
 
     def _execute_sparql_query(self, query: str) -> list:
-        """Helper: SPARQL 쿼리를 Fuseki에 전송하고 JSON 결과를 반환합니다."""
         try:
             sparql = SPARQLWrapper(self.FUSEKI_QUERY_ENDPOINT)
             sparql.setQuery(query)
@@ -679,7 +678,9 @@ class DashboardView(APIView):
             return []
 
     def _get_documents_from_rdb(self, doc_ids: set) -> dict:
-        """Helper: RDB에서 문서 상세 정보를 한 번의 쿼리로 가져옵니다."""
+        """
+        RDB에서 문서 상세 정보를 가져옵니다. (타입 판별을 위한 필드 포함)
+        """
         if not doc_ids: return {}
         
         docs_qs = TextDocument.objects.filter(id__in=doc_ids)
@@ -692,22 +693,48 @@ class DashboardView(APIView):
                     file_url = self.request.build_absolute_uri(doc.uploaded_file.url)
                 except Exception:
                     file_url = doc.uploaded_file.url
+
             doc_map[doc.id] = {
                 "id": doc.id,
                 "title": doc.title,
                 "summary": doc.summary,
                 "file_path": doc.file_path,
                 "uploaded_file": file_url,
+                "sender": doc.sender, 
                 "updated_at": doc.updated_at.isoformat()
             }
         return doc_map
 
-    def _build_sparql_query(self, user_uri: str, mode: str, user_job_template_uri: str, template_uri: str) -> str:
+    def _determine_doc_type(self, doc_data: dict) -> str:
         """
-        요청 모드(hobby/developer)와 직업 템플릿에 따라
-        '카테고리'와 '문서 ID'를 추론하는 동적 SPARQL 쿼리를 생성합니다.
+        문서 데이터를 기반으로 타입을 판별합니다. (Serializer 로직과 동일)
         """
+        if doc_data.get('sender'):
+            return "EMAIL"  # GMAIL 등 이메일
         
+        file_path = doc_data.get('file_path', '')
+        if file_path and file_path.startswith('http'):
+            return "LINK"   # 북마크
+        
+        uploaded_file = doc_data.get('uploaded_file')
+        if uploaded_file:
+            # 확장자로 상세 구분
+            ext = uploaded_file.split('.')[-1].lower()
+            if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']:
+                return "IMAGE"
+            elif ext == 'pdf':
+                return "PDF"
+            else:
+                return "FILE" # 그 외 파일 (docx 등)
+        
+        # 로컬 경로만 있는 경우 (테스트 데이터 등)
+        if file_path:
+            return "FILE"
+
+        # 아무것도 없으면 메모
+        return "MEMO"
+
+    def _build_sparql_query(self, user_uri: str, mode: str, user_job_template_uri: str, template_uri: str) -> str:
         base_query = f"""
         ?doc sseukssak:hasOwner <{user_uri}> .
         ?doc sseukssak:hasType ?type .
@@ -721,7 +748,6 @@ class DashboardView(APIView):
         query_parts = []
         
         if mode == 'hobby':
-            # [취미 모드]
             query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* <{self.SCHEMA_URI}HobbyLeisure> . BIND(<{self.SCHEMA_URI}HobbyLeisure> AS ?category_uri) }}")
             query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* <{self.SCHEMA_URI}HobbyTravel> . BIND(<{self.SCHEMA_URI}HobbyTravel> AS ?category_uri) }}")
             query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* <{self.SCHEMA_URI}HobbyCreation> . BIND(<{self.SCHEMA_URI}HobbyCreation> AS ?category_uri) }}")
@@ -734,18 +760,13 @@ class DashboardView(APIView):
                 BIND(<{self.SCHEMA_URI}Other> AS ?category_uri)
             }}""")
         else:
-            # --------------------------------
-            # [본업 모드] 
-            # --------------------------------
             query_parts.append(f"""
-            
+            {{ 
                 {base_query}
                 ?type rdfs:subClassOf* ?category_uri .       
                 ?category_uri rdfs:subClassOf {template_uri} . 
+            }}""")
             
-            """)
-            
-        # 모든 쿼리를 UNION으로 묶어 Fuseki에 요청
         return f"""
         PREFIX sseukssak: <{self.SCHEMA_URI}>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -761,9 +782,8 @@ class DashboardView(APIView):
         user = request.user
         user_uri = f"{self.SCHEMA_URI}User_{user.id}"
         
-        # 1. 'mode'와 'tag' 쿼리 파라미터를 가져옴
         mode = request.query_params.get('mode', 'default') 
-        tag_name = request.query_params.get('tag', None) 
+        tag_name = request.query_params.get('tag', None)
         
         user_job_template = user.job_template
         
@@ -777,48 +797,46 @@ class DashboardView(APIView):
         template_uri = f"<{self.SCHEMA_URI}{template_uri_str}>"
         user_job_template_uri = f"<{self.SCHEMA_URI}{user_job_template_uri_str}>"
 
-        # 2. (Fuseki) 'mode' 기준으로 모든 문서 ID/카테고리 추론 (수정 없음)
+        # 1. Fuseki 쿼리 실행
         full_query = self._build_sparql_query(user_uri, mode, user_job_template_uri, template_uri)
         sparql_results = self._execute_sparql_query(full_query)
         
-        # 3. (RDB) [신규] 태그 필터링 적용
-        
-        # 3a. Fuseki가 찾은 모든 문서 ID (예: {42, 43, 44, 45, 46})
+        # 2. 태그 필터링 준비
         all_doc_ids_from_fuseki = {int(res["doc_id"]["value"]) for res in sparql_results}
         
-        # 3b. 'tag_name'이 있다면, RDB에서 이 ID 목록을 다시 필터링
         if tag_name:
-            # RDB 쿼리: "Fuseki 결과 ID 중에서, 이 태그를 가진 ID만 골라내줘"
             doc_ids_with_tag = set(TextDocument.objects.filter(
                 author=user,
                 id__in=all_doc_ids_from_fuseki,     
                 tags__tag_name__iexact=tag_name   
             ).values_list('id', flat=True))
         else:
-            # 태그 필터가 없으면 모든 ID 사용
             doc_ids_with_tag = all_doc_ids_from_fuseki
 
-        # 4. (RDB) '최종 필터링된' ID로만 문서 상세 정보 가져오기
-        # (예: {42, 44}만 조회)
+        # 3. 문서 데이터 가져오기
         doc_details_map = self._get_documents_from_rdb(doc_ids_with_tag)
         
-        # 5. (BE) 데이터 최종 조립
+        # 4. 데이터 조립 (카테고리별 분류 및 타입 카운팅)
         category_doc_map = defaultdict(list)
-        category_counts_map = Counter() 
+        category_type_counts = defaultdict(Counter) # 타입별 카운터
 
         for res in sparql_results:
             doc_id = int(res["doc_id"]["value"])
             
-            # 이 doc_id가 '태그 필터'에서 살아남았는지 확인
             if doc_id in doc_ids_with_tag: 
                 category_uri = res["category_uri"]["value"].replace(self.SCHEMA_URI, "sseukssak:") 
                 
-                if doc_id in doc_details_map: # (항상 True여야 함)
-                    category_doc_map[category_uri].append(doc_details_map[doc_id])
-                    category_counts_map[category_uri] += 1
+                if doc_id in doc_details_map:
+                    doc_data = doc_details_map[doc_id]
+                    
+                    # [신규] 문서 타입 판별
+                    doc_type = self._determine_doc_type(doc_data)
+                    
+                    # 데이터 저장
+                    category_doc_map[category_uri].append(doc_data)
+                    category_type_counts[category_uri][doc_type] += 1 # 타입 카운트 증가
         
-        # 6. (BE) 방사형 그래프 및 카테고리 목록 생성 (수정 없음)
-        # (이미 필터링된 category_counts_map을 사용하므로 그래프도 자동 필터링됨)
+        # 5. 응답 데이터 생성
         radar_chart_data = []
         categorized_docs_list = []
         
@@ -841,13 +859,20 @@ class DashboardView(APIView):
             docs.sort(key=lambda x: x['updated_at'], reverse=True) 
             count = len(docs)
             
+            # 해당 카테고리의 문서 타입별 개수
+            type_counts = dict(category_type_counts.get(category_uri, {}))
+            
             radar_chart_data.append({"axis": category_uri, "label": category_name, "value": count})
+            
             categorized_docs_list.append({
-                "category_label": category_name, "category_uri": category_uri,
-                "count": count, "documents": docs
+                "category_label": category_name, 
+                "category_uri": category_uri,
+                "count": count, 
+                "type_counts": type_counts,
+                "documents": docs
             })
 
-        # 7. 최종 JSON 응답
+        # 6. 최종 JSON 응답
         response_data = {
             "current_mode": mode,
             "user_job_template": user_job_template,
