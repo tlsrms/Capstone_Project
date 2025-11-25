@@ -77,7 +77,7 @@ class Command(BaseCommand):
         
         scheduler.add_job(
             sync_all_users_gmail,
-            trigger=IntervalTrigger(minutes=10),
+            trigger=IntervalTrigger(minutes=0.2),
             id="gmail_sync",
             max_instances=1,
             replace_existing=True,

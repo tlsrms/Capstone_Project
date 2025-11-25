@@ -473,7 +473,7 @@ Format: [ ["predicate_uri", "object_string"], ... ]
         print(f"--- Finished processing. {organized_count} documents completed ---")
 
         return Response(
-            {"message": f"Organization complete for {organized_count} out of {doc_count} new documents."},
+            {"message": f"[정리하기] {doc_count}개의 문서 중 {organized_count}개 정리 완료!"},
             status=status.HTTP_202_ACCEPTED
         )
     

@@ -13,6 +13,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from google.oauth2 import id_token
 from google.auth.transport import requests as grequests
+from .google_oauth import create_google_flow
 
 from .models import CustomUser
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer
@@ -169,38 +170,57 @@ class GmailMessageAnalyzeView(APIView):
         
         
 # --------------------
-# Google 로그인 (id_token 방식 - 프론트에서 id_token 보내는 경우)
+# Google 로그인 
 # --------------------
 class GoogleLoginView(APIView):
     """
     POST /api/auth/google/
-    프론트에서 Google id_token을 보내주는 방식의 로그인
+    Body: { "code": "4/0A..." }
     """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        token = request.data.get("id_token")
-
-        if not token:
+        # 1. 프론트에서 'code'를 받아야 함 (id_token 아님!)
+        code = request.data.get("code")
+        
+        if not code:
             return Response(
-                {"detail": "id_token is required"},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"detail": "Google Authorization Code is required (key: 'code')."}, 
+                status=status.HTTP_400_BAD_REQUEST
             )
 
         try:
-            # Google에서 id_token 검증
-            idinfo = id_token.verify_oauth2_token(
-                token,
+            # 2. Flow 객체 생성 및 Code -> Token 교환
+            flow = create_google_flow()
+            
+            # [중요] 프론트엔드가 'postmessage' 방식을 쓴다면 redirect_uri를 이렇게 설정해야 함
+            # (React의 useGoogleLogin hook 사용 시 보통 'postmessage'임)
+            flow.redirect_uri = 'postmessage' 
+            
+            flow.fetch_token(code=code)
+            credentials = flow.credentials
+
+            # 3. 이메일 정보 획득 (id_token 디코딩)
+            id_info = id_token.verify_oauth2_token(
+                credentials.id_token,
                 grequests.Request(),
-                settings.GOOGLE_OAUTH_CLIENT_ID,  # settings.py에 있는 값 사용
+                settings.GOOGLE_OAUTH_CLIENT_ID,
             )
+            email = id_info["email"]
 
-            email = idinfo.get("email")
-
-            # 우리 서비스 유저 찾기 or 생성
+            # 4. 유저 생성/조회
             user, created = CustomUser.objects.get_or_create(email=email)
 
-            # JWT 발급
+            # 5. [핵심] Refresh Token 저장
+            # 주의: 사용자가 처음 동의했을 때만 줍니다. (이미 동의했으면 안 옴)
+            if credentials.refresh_token:
+                user.gmail_refresh_token = credentials.refresh_token
+                user.save()
+                print(f"✅ Refresh Token Saved for {email}")
+            else:
+                print(f"⚠️ No Refresh Token for {email}. (User might need to revoke permissions)")
+
+            # 6. 서비스 자체 토큰 발급
             refresh = RefreshToken.for_user(user)
 
             return Response(
@@ -208,16 +228,18 @@ class GoogleLoginView(APIView):
                     "user": UserSerializer(user).data,
                     "access": str(refresh.access_token),
                     "refresh": str(refresh),
+                    "is_new_user": created,
                 },
                 status=status.HTTP_200_OK,
             )
 
-        except ValueError as e:
+        except Exception as e:
+            print(f"[Google Login Error] {e}")
             return Response(
-                {"detail": "Invalid token", "error": str(e)},
-                status=status.HTTP_401_UNAUTHORIZED,
+                {"detail": "Login failed", "error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
             )
-
+        
 
 # --------------------
 # Google OAuth 서버 리다이렉트 방식 (login / callback)
@@ -256,6 +278,9 @@ def google_callback(request):
         # authorization code → access/refresh token 교환
         flow.fetch_token(authorization_response=authorization_response)
         credentials = flow.credentials  # access_token, refresh_token, id_token 등
+
+        print(f"[Google Login] Access Token: {credentials.token[:10]}...")
+        print(f"[Google Login] Refresh Token: {credentials.refresh_token}")
 
         # id_token 검증해서 구글 계정 정보 얻기
         id_info = id_token.verify_oauth2_token(
