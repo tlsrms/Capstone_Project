@@ -29,6 +29,8 @@ class DocumentSerializer(serializers.ModelSerializer):
     # 2.6 티켓 - Fuseki에서 '타입'과 '관계'를 가져오는 필드
     semantic_details = serializers.SerializerMethodField()
 
+    doc_type = serializers.SerializerMethodField()
+
     class Meta:
         model = TextDocument
         fields = [
@@ -38,19 +40,53 @@ class DocumentSerializer(serializers.ModelSerializer):
             'tags', 
             'created_at', 'updated_at', 
             'summary',
-            'semantic_details'
+            'semantic_details',
+            'sender', 
+            'email_date',
+            'doc_type'
         ]
         
         # read_only_fields에서 'file_path' 제거
         read_only_fields = [
             'id', 'author_email', 'created_at', 'updated_at', 'tags',
-            'summary', 'semantic_details'
+            'summary', 'semantic_details', 'sender', 'email_date', 'doc_type'
         ]
         
         # 'file_path'는 쓰기(POST/PATCH)는 가능하지만, 필수는 아님
         extra_kwargs = {
             'file_path': {'required': False, 'allow_blank': True}
         }
+    
+    def get_doc_type(self, obj):
+        """
+        문서의 필드 상태를 보고 유형을 판단합니다.
+        - EMAIL: sender가 있음
+        - IMAGE/PDF/DOC: uploaded_file이 있음
+        - LINK: file_path가 'http'로 시작함
+        - MEMO: 위 사항이 모두 해당 안 됨 (순수 텍스트)
+        """
+        if obj.sender:
+            return "EMAIL"
+        
+        if obj.file_path and obj.file_path.startswith("http"):
+            return "LINK"  # 북마크
+            
+        if obj.uploaded_file:
+            # 확장자로 세분화 
+            ext = obj.uploaded_file.name.lower().split('.')[-1]
+            if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
+                return "IMAGE"
+            elif ext == 'pdf':
+                return "PDF"
+            else:
+                return "FILE" # 기타 파일
+        
+        # 로컬 파일 경로만 있는 경우 (테스트 데이터 등)
+        if obj.file_path: 
+             return "FILE"
+
+        # 아무것도 없으면 메모
+        return "MEMO"
 
     def get_semantic_details(self, obj: TextDocument) -> dict:
         """

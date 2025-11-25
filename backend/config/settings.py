@@ -16,6 +16,23 @@ load_dotenv()
 
 from pathlib import Path
 from datetime import timedelta
+import os 
+from dotenv import load_dotenv
+from corsheaders.defaults import default_headers
+
+# 1. .env 파일 로드
+load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# 2. 환경 변수에서 값 가져오기 (없으면 에러 나거나 기본값 사용)
+SECRET_KEY = os.getenv('SECRET_KEY')
+
+# DEBUG는 문자열 'True'인지 확인
+DEBUG = os.getenv('DEBUG') == 'True'
+
+# 배포 시엔 서버 IP를 여기에 넣어야 함
+ALLOWED_HOSTS = ['*']
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -150,7 +167,7 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),   # Access 토큰 만료 시간 (예: 1시간)
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),   # Access 토큰 만료 시간 (예: 1시간)
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),    # Refresh 토큰 만료 시간 (예: 7일)
     
     # 'Token' 방식과 달리, 헤더에 'Bearer' 키워드를 사용합니다.
@@ -166,6 +183,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 
 # Google OAuth 설정
+<<<<<<< HEAD
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
 GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
 GOOGLE_OAUTH2_REDIRECT_URI = os.getenv("GOOGLE_OAUTH2_REDIRECT_URI")
@@ -178,11 +196,27 @@ GOOGLE_OAUTH2_SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
 ]
 
-# # Ollama AI 설정
-OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL_NAME = "gemma3:4b"
+# 허용할 프론트엔드 주소 등록
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",  # React 기본 포트
+    "http://localhost:5173",  # Vite/Vue 기본 포트
+    "http://127.0.0.1:3000",
+]
 
-# # Frontend URL
-FRONTEND_URL = 'http://localhost:3000'
-APSCHEDULER_DATETIME_FORMAT = "N j, Y, f:s a"
-APSCHEDULER_RUN_NOW_TIMEOUT = 25
+# 쿠키/인증정보 포함 허용
+CORS_ALLOW_CREDENTIALS = True
+
+ALLOWED_HOSTS = ['*']
+
+CSRF_TRUSTED_ORIGINS = [
+    'https://*.ngrok-free.app', 
+    'https://*.ngrok-free.dev', 
+    'http://localhost:3000',
+]
+
+# 기존 헤더에 ngrok 우회용 헤더 추가 허용
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "ngrok-skip-browser-warning",
+]
+
+OLLAMA_MODEL_NAME = "gemma3:4b"

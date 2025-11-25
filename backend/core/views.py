@@ -47,7 +47,31 @@ class DocumentViewSet(viewsets.ModelViewSet):
     SCHEMA_URI = "http://api.sseukssak.com/ontology#"
 
     def get_queryset(self):
-        return TextDocument.objects.filter(author=self.request.user).order_by('-created_at')
+        queryset = TextDocument.objects.filter(author=self.request.user).order_by('-created_at')
+        
+        # 쿼리 파라미터로 필터링 (?type=memo)
+        doc_type = self.request.query_params.get('type')
+        
+        if doc_type == 'memo':
+            # 메모: 파일도 없고, 링크도 아니고, 이메일도 아닌 것
+            queryset = queryset.filter(
+                uploaded_file='', 
+                sender__isnull=True
+            ).exclude(file_path__startswith='http')
+            
+        elif doc_type == 'file':
+            # 파일: 업로드된 파일이 있는 것
+            queryset = queryset.filter(uploaded_file__isnull=False).exclude(uploaded_file='')
+            
+        elif doc_type == 'link':
+            # 링크: file_path가 http로 시작하는 것
+            queryset = queryset.filter(file_path__startswith='http')
+            
+        elif doc_type == 'email':
+            # 이메일: sender가 있는 것
+            queryset = queryset.filter(sender__isnull=False)
+
+        return queryset
 
     # Fuseki 데이터 삭제 헬퍼 함수
     def _delete_fuseki_data(self, doc_id):
@@ -967,9 +991,11 @@ class PersonaAnalysisView(APIView):
             if uri.startswith(target_prefix) or user_job_template == "default"
         }
         
+        filtered_total_docs = sum(filtered_counts_map.values())
+
         # 3. 필터링된 맵으로 정렬 수행
         sorted_categories = sorted(
-            filtered_counts_map.items(), 
+            filtered_counts_map.items(),
             key=lambda item: item[1], 
             reverse=True
         )
@@ -977,7 +1003,7 @@ class PersonaAnalysisView(APIView):
         # 4. 상위 5개 추출 및 데이터 구성
         top_5_types = []
         for uri, count in sorted_categories[:5]:
-            percent = round((count / valid_total_docs) * 100, 1) if valid_total_docs > 0 else 0
+            percent = round((count / filtered_total_docs) * 100, 1) if filtered_total_docs > 0 else 0
             label = self.CATEGORY_LABELS.get(uri, uri.split(':')[-1])
             keyword = self.CATEGORY_KEYWORDS.get(uri, label) # 키워드 매핑
             
@@ -1263,139 +1289,139 @@ class BookmarkImportView(APIView):
 # ========================================
 # 3.2 BE : Gmail Integration
 # ========================================
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def sync_gmail_to_documents(request):
-    """
-    Gmail을 가져와서 TextDocument에 저장
-    POST /api/sync-gmail/
-    Body: { "max": 10 }
-    """
-    user = request.user
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def sync_gmail_to_documents(request):
+#     """
+#     Gmail을 가져와서 TextDocument에 저장
+#     POST /api/sync-gmail/
+#     Body: { "max": 10 }
+#     """
+#     user = request.user
     
-    if not user.gmail_refresh_token:
-        return Response(
-            {"detail": "Gmail not connected. Please login with Google first."},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+#     if not user.gmail_refresh_token:
+#         return Response(
+#             {"detail": "Gmail not connected. Please login with Google first."},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
     
-    try:
-        # 1. Gmail 목록 가져오기
-        max_results = request.data.get('max', 10)
-        messages = list_messages_for_user(user, label_ids=['INBOX'], max_results=max_results)
+#     try:
+#         # 1. Gmail 목록 가져오기
+#         max_results = request.data.get('max', 10)
+#         messages = list_messages_for_user(user, label_ids=['INBOX'], max_results=max_results)
         
-        synced_count = 0
-        skipped_count = 0
-        synced_list = []
+#         synced_count = 0
+#         skipped_count = 0
+#         synced_list = []
         
-        # 2. 각 메일 처리
-        for msg_info in messages:
-            message_id = msg_info['id']
-            gmail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+#         # 2. 각 메일 처리
+#         for msg_info in messages:
+#             message_id = msg_info['id']
+#             gmail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
             
-            # 이미 저장된 메일인지 확인
-            if TextDocument.objects.filter(author=user, file_path=gmail_url).exists():
-                skipped_count += 1
-                continue
+#             # 이미 저장된 메일인지 확인
+#             if TextDocument.objects.filter(author=user, file_path=gmail_url).exists():
+#                 skipped_count += 1
+#                 continue
             
-            # 메일 상세 정보 가져오기
-            msg = get_message_detail_for_user(user, message_id)
-            subject, body_text = extract_subject_and_body(msg)
+#             # 메일 상세 정보 가져오기
+#             msg = get_message_detail_for_user(user, message_id)
+#             subject, body_text = extract_subject_and_body(msg)
             
-            # 헤더에서 필요한 정보 추출
-            headers = msg.get('payload', {}).get('headers', [])
-            sender = ""
-            date_str = ""
+#             # 헤더에서 필요한 정보 추출
+#             headers = msg.get('payload', {}).get('headers', [])
+#             sender = ""
+#             date_str = ""
             
-            for header in headers:
-                if header['name'].lower() == 'from':
-                    sender = header['value']
-                elif header['name'].lower() == 'date':
-                    date_str = header['value']
+#             for header in headers:
+#                 if header['name'].lower() == 'from':
+#                     sender = header['value']
+#                 elif header['name'].lower() == 'date':
+#                     date_str = header['value']
             
-            # 빈 본문 건너뛰기
-            if not body_text or len(body_text.strip()) < 10:
-                skipped_count += 1
-                continue
+#             # 빈 본문 건너뛰기
+#             if not body_text or len(body_text.strip()) < 10:
+#                 skipped_count += 1
+#                 continue
             
-            # 3. TextDocument에 저장
-            doc = TextDocument.objects.create(
-                author=user,
-                title=f"[Gmail] {subject[:100]}",
-                content=body_text[:5000],
-                file_path=gmail_url,
-                is_organized=False,
-                sender=sender,
-                email_date=date_str,
-            )
+#             # 3. TextDocument에 저장
+#             doc = TextDocument.objects.create(
+#                 author=user,
+#                 title=f"[Gmail] {subject[:100]}",
+#                 content=body_text[:5000],
+#                 file_path=gmail_url,
+#                 is_organized=False,
+#                 sender=sender,
+#                 email_date=date_str,
+#             )
             
-            synced_count += 1
-            synced_list.append({
-                "id": message_id,
-                "doc_id": doc.id,
-                "title": subject[:100],
-                "sender": sender,
-                "date": date_str
-            })
+#             synced_count += 1
+#             synced_list.append({
+#                 "id": message_id,
+#                 "doc_id": doc.id,
+#                 "title": subject[:100],
+#                 "sender": sender,
+#                 "date": date_str
+#             })
         
-        # 4. 간단한 응답 반환
-        return Response({
-            "message": f"{synced_count}개의 메일을 가져왔습니다",
-            "synced": synced_count,
-            "skipped": skipped_count,
-            "total": len(messages),
-            "emails": synced_list
-        }, status=status.HTTP_200_OK)
+#         # 4. 간단한 응답 반환
+#         return Response({
+#             "message": f"{synced_count}개의 메일을 가져왔습니다",
+#             "synced": synced_count,
+#             "skipped": skipped_count,
+#             "total": len(messages),
+#             "emails": synced_list
+#         }, status=status.HTTP_200_OK)
         
-    except Exception as e:
-        return Response(
-            {"detail": "Failed to sync Gmail", "error": str(e)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+#     except Exception as e:
+#         return Response(
+#             {"detail": "Failed to sync Gmail", "error": str(e)},
+#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#         )
 
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def gmail_message_detail(request, message_id):
-    """
-    특정 Gmail 메시지 상세 조회
-    GET /api/gmail/<message_id>/
-    """
-    user = request.user
+# @api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def gmail_message_detail(request, message_id):
+#     """
+#     특정 Gmail 메시지 상세 조회
+#     GET /api/gmail/<message_id>/
+#     """
+#     user = request.user
     
-    if not user.gmail_refresh_token:
-        return Response(
-            {"detail": "Gmail not connected"},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+#     if not user.gmail_refresh_token:
+#         return Response(
+#             {"detail": "Gmail not connected"},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
     
-    try:
-        msg = get_message_detail_for_user(user, message_id)
-        subject, body_text = extract_subject_and_body(msg)
+#     try:
+#         msg = get_message_detail_for_user(user, message_id)
+#         subject, body_text = extract_subject_and_body(msg)
         
-        # 헤더에서 필요한 정보 추출
-        headers = msg.get('payload', {}).get('headers', [])
-        sender = ""
-        date_str = ""
+#         # 헤더에서 필요한 정보 추출
+#         headers = msg.get('payload', {}).get('headers', [])
+#         sender = ""
+#         date_str = ""
         
-        for header in headers:
-            if header['name'].lower() == 'from':
-                sender = header['value']
-            elif header['name'].lower() == 'date':
-                date_str = header['value']
+#         for header in headers:
+#             if header['name'].lower() == 'from':
+#                 sender = header['value']
+#             elif header['name'].lower() == 'date':
+#                 date_str = header['value']
         
-        return Response({
-            "id": message_id,
-            "subject": subject,
-            "content": body_text,
-            "sender": sender,
-            "date": date_str,
-            "gmail_url": f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
-        }, status=status.HTTP_200_OK)
+#         return Response({
+#             "id": message_id,
+#             "subject": subject,
+#             "content": body_text,
+#             "sender": sender,
+#             "date": date_str,
+#             "gmail_url": f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+#         }, status=status.HTTP_200_OK)
         
-    except Exception as e:
-        return Response(
-            {"detail": "Failed to fetch message", "error": str(e)},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+#     except Exception as e:
+#         return Response(
+#             {"detail": "Failed to fetch message", "error": str(e)},
+#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#         )
     
