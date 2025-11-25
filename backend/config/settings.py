@@ -9,6 +9,10 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from pathlib import Path
 from datetime import timedelta
@@ -162,9 +166,9 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 
 # Google OAuth 설정
-GOOGLE_OAUTH_CLIENT_ID = "644535033601-kv8h052g252hpu14se2tblo3htu5t5c4.apps.googleusercontent.com"
-GOOGLE_OAUTH_CLIENT_SECRET = "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" 
-GOOGLE_OAUTH2_REDIRECT_URI = 'http://localhost:8000/api/auth/google/callback/'
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+GOOGLE_OAUTH2_REDIRECT_URI = os.getenv("GOOGLE_OAUTH2_REDIRECT_URI")
 
 # Google OAuth Scopes
 GOOGLE_OAUTH2_SCOPES = [
