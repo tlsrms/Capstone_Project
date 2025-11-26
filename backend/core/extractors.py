@@ -33,6 +33,8 @@ class TextExtractor:
                 return TextExtractor._extract_image_hybrid(file_path)
             elif ext == '.txt':
                 return TextExtractor._extract_txt(file_path)
+            elif ext == '.txt':
+                return TextExtractor._extract_txt(file_path)
             else:
                 return f"[지원하지 않는 파일 형식입니다: {ext}]"
         except Exception as e:
@@ -54,8 +56,32 @@ class TextExtractor:
 
     @staticmethod
     def _extract_txt(file_path):
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
+        """
+        여러 인코딩을 순서대로 시도하여 텍스트를 읽습니다.
+        """
+        # 시도할 인코딩 목록 (우선순위 순)
+        # utf-8-sig: 윈도우 메모장의 UTF-8 (BOM 포함) 처리용
+        # utf-16: 윈도우 기본 유니코드 처리용
+        encodings = ['utf-8', 'utf-8-sig', 'cp949', 'euc-kr', 'utf-16']
+        
+        for enc in encodings:
+            try:
+                with open(file_path, 'r', encoding=enc) as f:
+                    text = f.read()
+                    
+                    # [중요] Null Byte(\x00) 제거
+                    # (일부 인코딩 문제로 널 문자가 섞이면 DB 저장 시 텍스트가 잘리거나 비어보일 수 있음)
+                    text = text.replace('\x00', '')
+                    
+                    # 읽기에 성공하고 내용이 있다면 반환
+                    if text.strip():
+                        print(f"[Extractor] Successfully decoded with encoding: {enc}")
+                        return text
+            except (UnicodeDecodeError, UnicodeError):
+                continue # 실패하면 다음 인코딩 시도
+        
+        print("[Extractor] Failed to decode text file with all supported encodings.")
+        return ""
         
     @staticmethod
     def _extract_image_hybrid(file_path):

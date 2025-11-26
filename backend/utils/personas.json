@@ -2,7 +2,7 @@
   "personas": [
     {
       "id": "scholarship.top_student",
-      "label": "장학금 면제생",
+      "label": "등록금 면제생",
       "description": "학습, 과제, 연구 등 모든 분야를 균형 있게 챙기는 육각형 인재입니다.",
       "target_template": "student",
       "keywords": ["학업 연계력", "완벽한 밸런스", "성실함의 정석"],
