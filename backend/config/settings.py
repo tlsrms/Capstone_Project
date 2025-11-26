@@ -9,9 +9,30 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from pathlib import Path
 from datetime import timedelta
+import os 
+from dotenv import load_dotenv
+from corsheaders.defaults import default_headers
+
+# 1. .env 파일 로드
+load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# 2. 환경 변수에서 값 가져오기 (없으면 에러 나거나 기본값 사용)
+SECRET_KEY = os.getenv('SECRET_KEY')
+
+# DEBUG는 문자열 'True'인지 확인
+DEBUG = os.getenv('DEBUG') == 'True'
+
+# 배포 시엔 서버 IP를 여기에 넣어야 함
+ALLOWED_HOSTS = ['*']
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -37,6 +58,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
+    'django_apscheduler',
     'django.contrib.staticfiles',
 
     # 1. 도구
@@ -138,7 +160,6 @@ AUTH_USER_MODEL = 'users.CustomUser'
 # "일단 개발 중이니, 모든 주소에서 오는 요청을 다 허용" (CORS)
 CORS_ALLOW_ALL_ORIGINS = True
 
-GOOGLE_OAUTH_CLIENT_ID = "644535033601-kv8h052g252hpu14se2tblo3htu5t5c4.apps.googleusercontent.com"
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -146,9 +167,55 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=1),   # Access 토큰 만료 시간 (예: 1시간)
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=1),   # Access 토큰 만료 시간 (예: 1시간)
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),    # Refresh 토큰 만료 시간 (예: 7일)
     
     # 'Token' 방식과 달리, 헤더에 'Bearer' 키워드를 사용합니다.
     "AUTH_HEADER_TYPES": ("Bearer",), 
 }
+
+# 파일 업로드(Media) 설정
+# 웹에서 접근할 URL (예: http://localhost:8000/media/파일.jpg)
+MEDIA_URL = '/media/'
+
+# 실제 파일이 저장될 서버 내 경로 (backend/media 폴더)
+MEDIA_ROOT = BASE_DIR / 'media'
+
+
+# Google OAuth 설정
+GOOGLE_OAUTH_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
+GOOGLE_OAUTH2_REDIRECT_URI = os.getenv("GOOGLE_OAUTH2_REDIRECT_URI")
+
+# Google OAuth Scopes
+GOOGLE_OAUTH2_SCOPES = [
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/gmail.readonly',
+]
+
+# 허용할 프론트엔드 주소 등록
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",  # React 기본 포트
+    "http://localhost:5173",  # Vite/Vue 기본 포트
+    "http://127.0.0.1:3000",
+]
+
+# 쿠키/인증정보 포함 허용
+CORS_ALLOW_CREDENTIALS = True
+
+ALLOWED_HOSTS = ['*']
+
+CSRF_TRUSTED_ORIGINS = [
+    'https://*.ngrok-free.app', 
+    'https://*.ngrok-free.dev', 
+    'http://localhost:3000',
+]
+
+# 기존 헤더에 ngrok 우회용 헤더 추가 허용
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "ngrok-skip-browser-warning",
+]
+
+OLLAMA_MODEL_NAME = "gemma3:4b"

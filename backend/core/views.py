@@ -1,5 +1,6 @@
 import requests 
-import json      
+import json  
+from django.conf import settings
 from SPARQLWrapper import SPARQLWrapper, POST, JSON
 
 from rest_framework import viewsets, mixins, status
@@ -7,44 +8,147 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication 
+from rest_framework.parsers import MultiPartParser, FormParser
 from django.shortcuts import get_object_or_404
 from .models import TextDocument, Tag
-from .serializers import DocumentSerializer, TagSerializer
+from .serializers import DocumentSerializer, TagSerializer, BookmarkUploadSerializer
 
 import os 
 from django.db.models import Q
-from analytics.metrics import compute_cleanliness, calculate_fragmentation, build_category_distribution
-from analytics.personas import load_persona_rules, score_personas
+from utils.metrics import compute_cleanliness, calculate_fragmentation, build_category_distribution
+from utils.personas import load_persona_rules, score_personas
 
 from collections import defaultdict, Counter 
 
+from .extractors import TextExtractor
+
+from utils.bookmarks_parser import extract_bookmarks_from_html
+from .serializers import UrlListSerializer
+from utils.web_scraper import scrape_url
+
+from rest_framework.decorators import api_view, permission_classes
+from users.gmail_service import list_messages_for_user, get_message_detail_for_user, extract_subject_and_body
+
+
+
 class DocumentViewSet(viewsets.ModelViewSet): 
     """
-    문서(TextDocument)에 대한 CRUD API를 처리하는 뷰셋
+    문서(TextDocument) CRUD API
+    - 파일 업로드 시: uploaded_file에서 텍스트 추출 + file_path는 분석용으로 저장
+    - 메모장 작성 시: content 직접 저장
+    - 수정 시: Fuseki 데이터 초기화 (semantic_details 리셋)
     """
     serializer_class = DocumentSerializer
-    
     authentication_classes = [JWTAuthentication] 
     permission_classes = [IsAuthenticated]     
+    
+    # Fuseki 설정
+    FUSEKI_UPDATE_ENDPOINT = "http://localhost:3030/sseukssak/update"
+    SCHEMA_URI = "http://api.sseukssak.com/ontology#"
+
     def get_queryset(self):
-        """ (GET) '내 글 목록'만 필터링 """
-        return TextDocument.objects.filter(author=self.request.user).order_by('-created_at')
+        queryset = TextDocument.objects.filter(author=self.request.user).order_by('-created_at')
+        
+        # 쿼리 파라미터로 필터링 (?type=memo)
+        doc_type = self.request.query_params.get('type')
+        
+        if doc_type == 'memo':
+            # 메모: 파일도 없고, 링크도 아니고, 이메일도 아닌 것
+            queryset = queryset.filter(
+                uploaded_file='', 
+                sender__isnull=True
+            ).exclude(file_path__startswith='http')
+            
+        elif doc_type == 'file':
+            # 파일: 업로드된 파일이 있는 것
+            queryset = queryset.filter(uploaded_file__isnull=False).exclude(uploaded_file='')
+            
+        elif doc_type == 'link':
+            # 링크: file_path가 http로 시작하는 것
+            queryset = queryset.filter(file_path__startswith='http')
+            
+        elif doc_type == 'email':
+            # 이메일: sender가 있는 것
+            queryset = queryset.filter(sender__isnull=False)
+
+        return queryset
+
+    # Fuseki 데이터 삭제 헬퍼 함수
+    def _delete_fuseki_data(self, doc_id):
+        """
+        문서 내용이 변경되었을 때, Fuseki에 저장된 '옛날 지식'을 삭제합니다.
+        """
+        doc_uri = f"{self.SCHEMA_URI}Document_{doc_id}"
+        delete_query = f"""
+        PREFIX sseukssak: <{self.SCHEMA_URI}>
+        DELETE WHERE {{
+            <{doc_uri}> ?predicate ?object .
+        }}
+        """
+        try:
+            sparql = SPARQLWrapper(self.FUSEKI_UPDATE_ENDPOINT)
+            sparql.setMethod(POST)
+            sparql.setQuery(delete_query)
+            sparql.query()
+            print(f"[Fuseki] Cleared old triples for Document {doc_id}")
+        except Exception as e:
+            print(f"[Fuseki Error] Failed to clear triples: {e}")
 
     def perform_create(self, serializer):
-        """ (POST) '글쓴이'를 나로 자동 지정 """
-        serializer.save(author=self.request.user)
-    
+        """ (POST) 문서 생성 """
+        # 1. 일단 데이터 저장
+        instance = serializer.save(author=self.request.user)
+        
+        # 2. 파일 업로드 -> 텍스트 추출
+        if instance.uploaded_file:
+            print(f"[Extractor] Uploaded file detected: {instance.uploaded_file.name}")
+            extracted_text = TextExtractor.extract(instance.uploaded_file.path)
+            
+            if extracted_text:
+                print(f"[Extractor] Success! Length: {len(extracted_text)}")
+                instance.content = extracted_text
+                instance.save()
+            else:
+                print("[Extractor] Failed to extract text or empty result.")
+        
+        elif instance.content:
+            print(f"[Memo] New text memo created: {instance.title}")
+
     def perform_update(self, serializer):
-        """
-        (PUT/PATCH) 문서가 업데이트될 때 호출됩니다.
-        """
-        print(f"[Trigger] Document {serializer.instance.id} updated. Flagging for re-organization.")
-        serializer.save(is_organized=False, summary="")
+        """ (PUT/PATCH) 문서 수정 """
+        # 1. 변경 전 파일 정보
+        old_file = serializer.instance.uploaded_file
+        
+        # 2. 저장 실행 (RDB 업데이트)
+        instance = serializer.save()
+        new_file = instance.uploaded_file
+        
+        # 3. 파일이 '새로' 업로드된 경우 -> 재추출 + 초기화
+        if new_file and new_file != old_file:
+            print(f"[Extractor] File updated. Re-extracting from: {new_file.path}")
+            extracted_text = TextExtractor.extract(new_file.path)
+            
+            instance.content = extracted_text
+            instance.is_organized = False 
+            instance.summary = ""
+            instance.save()
+            
+            # Fuseki 데이터 삭제 (semantic_details 초기화)
+            self._delete_fuseki_data(instance.id)
+            
+        # 4. 메타데이터(제목, 내용 등)가 바뀐 경우 -> 초기화
+        elif serializer.validated_data:
+             print(f"[Trigger] Metadata updated. Flagging for re-organization.")
+             instance.is_organized = False
+             instance.summary = ""
+             instance.save()
+
+             # Fuseki 데이터 삭제 (semantic_details 초기화)
+             self._delete_fuseki_data(instance.id)
 
 # ---------------------------------------------------
 # 2.6 BE: 태그 기능 뷰
 # ---------------------------------------------------
-
 class TagViewSet(mixins.CreateModelMixin,         # 1. (POST /api/tags/) 태그 생성
                 mixins.ListModelMixin,           # 2. (GET /api/tags/) 태그 목록 조회
                 viewsets.GenericViewSet):
@@ -166,50 +270,64 @@ class OrganizeView(APIView):
 
         # "reference_strings" 키 제거, "discovered_triples"로 통합
         return f"""
-Analyze the following text.
-Respond ONLY in JSON format with three keys: "summary", "type_label", and "discovered_triples".
+### INSTRUCTION ###
+Analyze the provided text and generate a JSON response based on the strict schema defined below.
+You must NOT output any other keys than "summary", "type_label", and "discovered_triples".
 
-1. "summary" (str): Provide a concise summary of the text. The summary should be written in Korean.
-2. "type_label" (str): Choose ONLY ONE `type_label` from this exact list: [{type_list_str}]
-3. "discovered_triples" (list[list[str]]):
-   Generate a list of (predicate, object) pairs you discover.
-   The subject is the document itself. 
-   Use predicates from this list ONLY: [{predicate_list_str}].
-   The object should be a simple string literal (e.g., "종합설계프로젝트", "Django", "Postman", "2025년").
-   If no triples are discovered, return [].
-   
-   Example:
-   "discovered_triples": [
-       ["sseukssak:discussesTopic", "종합설계프로젝트"],
-       ["sseukssak:mentionsNamedEntity", "Django"],
-       ["sseukssak:mentionsNamedEntity", "Postman"],
-       ["sseukssak:referencesDate", "2025년 2학기"]
-   ]
+### CONSTRAINT: type_label ###
+You MUST select exactly ONE type from this list:
+[{type_list_str}]
 
---- TEXT TO ANALYZE ---
-{document_content}
+### CONSTRAINT: discovered_triples ###
+Extract meaningful relationships. Use ONLY these predicates:
+[{predicate_list_str}]
+Format: [ ["predicate_uri", "object_string"], ... ]
+
+### INPUT TEXT ###
+{document_content[:3000]} 
+(Text truncated for processing limit...)
+
+### OUTPUT FORMAT (JSON ONLY) ###
+{{
+    "summary": "Summarize the text in Korean (1-2 sentences).",
+    "type_label": "One value from the list above",
+    "discovered_triples": [
+        ["sseukssak:discussesTopic", "Keyword"],
+        ["sseukssak:mentionsNamedEntity", "EntityName"]
+    ]
+}}
 """
 
-    def call_ollama(self, prompt, model_name="gemma3:4b"):
+    def call_ollama(self, prompt, model_name=None):
+        model_name = model_name or settings.OLLAMA_MODEL_NAME
         """
         Ollama 서버(2.1)에 API 요청을 보내고 3-Key JSON을 파싱합니다.
         """
-        OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
+        OLLAMA_ENDPOINT = "http://localhost:11434/api/generate"
         
+        system_instruction = (
+            "You are a strict JSON generator. "
+            "You output ONLY valid JSON. "
+            "Do not explain. Do not include Markdown formatting. "
+            "Follow the user's schema exactly."
+            "Translate the summary into Korean."
+        )
+
         try:
             payload = {
                 "model": model_name,
                 "format": "json",
                 "stream": False,
-                "messages": [{"role": "user", "content": prompt}]
+                "prompt": prompt,
+                "system": system_instruction
             }
             
-            response = requests.post(OLLAMA_ENDPOINT, json=payload, timeout=60) 
+            response = requests.post(OLLAMA_ENDPOINT, json=payload, timeout=120) 
             response.raise_for_status() 
 
             response_json = response.json()
-            message_content_str = response_json.get('message', {}).get('content', '{}')
-            
+            message_content_str = response_json.get('response', '{}')
+
             ai_result = json.loads(message_content_str) 
 
             # 3-Key 규격(Contract) 확인
@@ -355,7 +473,7 @@ Respond ONLY in JSON format with three keys: "summary", "type_label", and "disco
         print(f"--- Finished processing. {organized_count} documents completed ---")
 
         return Response(
-            {"message": f"Organization complete for {organized_count} out of {doc_count} new documents."},
+            {"message": f"[정리하기] {doc_count}개의 문서 중 {organized_count}개 정리 완료!"},
             status=status.HTTP_202_ACCEPTED
         )
     
@@ -383,7 +501,7 @@ class NeatnessScoreView(APIView):
         # 1. RDB 데이터 조회
         user_docs_qs = TextDocument.objects.filter(
             author=user, file_path__isnull=False
-        ).exclude(file_path="")
+        ).exclude(file_path="").exclude(file_path__startswith="http")
         
         user_docs_map = {doc.id: doc for doc in user_docs_qs}
         total_files = len(user_docs_map)
@@ -549,7 +667,6 @@ class DashboardView(APIView):
     }
 
     def _execute_sparql_query(self, query: str) -> list:
-        """Helper: SPARQL 쿼리를 Fuseki에 전송하고 JSON 결과를 반환합니다."""
         try:
             sparql = SPARQLWrapper(self.FUSEKI_QUERY_ENDPOINT)
             sparql.setQuery(query)
@@ -561,28 +678,63 @@ class DashboardView(APIView):
             return []
 
     def _get_documents_from_rdb(self, doc_ids: set) -> dict:
-        """Helper: RDB에서 문서 상세 정보를 한 번의 쿼리로 가져옵니다."""
+        """
+        RDB에서 문서 상세 정보를 가져옵니다. (타입 판별을 위한 필드 포함)
+        """
         if not doc_ids: return {}
         
         docs_qs = TextDocument.objects.filter(id__in=doc_ids)
         
         doc_map = {}
         for doc in docs_qs:
+            file_url = None
+            if doc.uploaded_file:
+                try:
+                    file_url = self.request.build_absolute_uri(doc.uploaded_file.url)
+                except Exception:
+                    file_url = doc.uploaded_file.url
+
             doc_map[doc.id] = {
                 "id": doc.id,
                 "title": doc.title,
                 "summary": doc.summary,
                 "file_path": doc.file_path,
+                "uploaded_file": file_url,
+                "sender": doc.sender, 
                 "updated_at": doc.updated_at.isoformat()
             }
         return doc_map
 
-    def _build_sparql_query(self, user_uri: str, mode: str, user_job_template_uri: str, template_uri: str) -> str:
+    def _determine_doc_type(self, doc_data: dict) -> str:
         """
-        [수정] 요청 모드(hobby/developer)와 직업 템플릿에 따라
-        '카테고리'와 '문서 ID'를 추론하는 동적 SPARQL 쿼리를 생성합니다.
+        문서 데이터를 기반으로 타입을 판별합니다. (Serializer 로직과 동일)
         """
+        if doc_data.get('sender'):
+            return "EMAIL"  # GMAIL 등 이메일
         
+        file_path = doc_data.get('file_path', '')
+        if file_path and file_path.startswith('http'):
+            return "LINK"   # 북마크
+        
+        uploaded_file = doc_data.get('uploaded_file')
+        if uploaded_file:
+            # 확장자로 상세 구분
+            ext = uploaded_file.split('.')[-1].lower()
+            if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']:
+                return "IMAGE"
+            elif ext == 'pdf':
+                return "PDF"
+            else:
+                return "FILE" # 그 외 파일 (docx 등)
+        
+        # 로컬 경로만 있는 경우 (테스트 데이터 등)
+        if file_path:
+            return "FILE"
+
+        # 아무것도 없으면 메모
+        return "MEMO"
+
+    def _build_sparql_query(self, user_uri: str, mode: str, user_job_template_uri: str, template_uri: str) -> str:
         base_query = f"""
         ?doc sseukssak:hasOwner <{user_uri}> .
         ?doc sseukssak:hasType ?type .
@@ -596,7 +748,6 @@ class DashboardView(APIView):
         query_parts = []
         
         if mode == 'hobby':
-            # [취미 모드]
             query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* <{self.SCHEMA_URI}HobbyLeisure> . BIND(<{self.SCHEMA_URI}HobbyLeisure> AS ?category_uri) }}")
             query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* <{self.SCHEMA_URI}HobbyTravel> . BIND(<{self.SCHEMA_URI}HobbyTravel> AS ?category_uri) }}")
             query_parts.append(f"{{ {base_query} ?type rdfs:subClassOf* <{self.SCHEMA_URI}HobbyCreation> . BIND(<{self.SCHEMA_URI}HobbyCreation> AS ?category_uri) }}")
@@ -609,18 +760,13 @@ class DashboardView(APIView):
                 BIND(<{self.SCHEMA_URI}Other> AS ?category_uri)
             }}""")
         else:
-            # --------------------------------
-            # [본업 모드] 
-            # --------------------------------
             query_parts.append(f"""
-            
+            {{ 
                 {base_query}
                 ?type rdfs:subClassOf* ?category_uri .       
                 ?category_uri rdfs:subClassOf {template_uri} . 
+            }}""")
             
-            """)
-            
-        # 모든 쿼리를 UNION으로 묶어 Fuseki에 요청
         return f"""
         PREFIX sseukssak: <{self.SCHEMA_URI}>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -636,9 +782,8 @@ class DashboardView(APIView):
         user = request.user
         user_uri = f"{self.SCHEMA_URI}User_{user.id}"
         
-        # 1. 'mode'와 'tag' 쿼리 파라미터를 가져옴
         mode = request.query_params.get('mode', 'default') 
-        tag_name = request.query_params.get('tag', None) 
+        tag_name = request.query_params.get('tag', None)
         
         user_job_template = user.job_template
         
@@ -652,48 +797,46 @@ class DashboardView(APIView):
         template_uri = f"<{self.SCHEMA_URI}{template_uri_str}>"
         user_job_template_uri = f"<{self.SCHEMA_URI}{user_job_template_uri_str}>"
 
-        # 2. (Fuseki) 'mode' 기준으로 모든 문서 ID/카테고리 추론 (수정 없음)
+        # 1. Fuseki 쿼리 실행
         full_query = self._build_sparql_query(user_uri, mode, user_job_template_uri, template_uri)
         sparql_results = self._execute_sparql_query(full_query)
         
-        # 3. (RDB) [신규] 태그 필터링 적용
-        
-        # 3a. Fuseki가 찾은 모든 문서 ID (예: {42, 43, 44, 45, 46})
+        # 2. 태그 필터링 준비
         all_doc_ids_from_fuseki = {int(res["doc_id"]["value"]) for res in sparql_results}
         
-        # 3b. 'tag_name'이 있다면, RDB에서 이 ID 목록을 다시 필터링
         if tag_name:
-            # RDB 쿼리: "Fuseki 결과 ID 중에서, 이 태그를 가진 ID만 골라내줘"
             doc_ids_with_tag = set(TextDocument.objects.filter(
                 author=user,
                 id__in=all_doc_ids_from_fuseki,     
                 tags__tag_name__iexact=tag_name   
             ).values_list('id', flat=True))
         else:
-            # 태그 필터가 없으면 모든 ID 사용
             doc_ids_with_tag = all_doc_ids_from_fuseki
 
-        # 4. (RDB) '최종 필터링된' ID로만 문서 상세 정보 가져오기
-        # (예: {42, 44}만 조회)
+        # 3. 문서 데이터 가져오기
         doc_details_map = self._get_documents_from_rdb(doc_ids_with_tag)
         
-        # 5. (BE) 데이터 최종 조립
+        # 4. 데이터 조립 (카테고리별 분류 및 타입 카운팅)
         category_doc_map = defaultdict(list)
-        category_counts_map = Counter() 
+        category_type_counts = defaultdict(Counter) # 타입별 카운터
 
         for res in sparql_results:
             doc_id = int(res["doc_id"]["value"])
             
-            # 이 doc_id가 '태그 필터'에서 살아남았는지 확인
             if doc_id in doc_ids_with_tag: 
                 category_uri = res["category_uri"]["value"].replace(self.SCHEMA_URI, "sseukssak:") 
                 
-                if doc_id in doc_details_map: # (항상 True여야 함)
-                    category_doc_map[category_uri].append(doc_details_map[doc_id])
-                    category_counts_map[category_uri] += 1
+                if doc_id in doc_details_map:
+                    doc_data = doc_details_map[doc_id]
+                    
+                    # [신규] 문서 타입 판별
+                    doc_type = self._determine_doc_type(doc_data)
+                    
+                    # 데이터 저장
+                    category_doc_map[category_uri].append(doc_data)
+                    category_type_counts[category_uri][doc_type] += 1 # 타입 카운트 증가
         
-        # 6. (BE) 방사형 그래프 및 카테고리 목록 생성 (수정 없음)
-        # (이미 필터링된 category_counts_map을 사용하므로 그래프도 자동 필터링됨)
+        # 5. 응답 데이터 생성
         radar_chart_data = []
         categorized_docs_list = []
         
@@ -716,13 +859,20 @@ class DashboardView(APIView):
             docs.sort(key=lambda x: x['updated_at'], reverse=True) 
             count = len(docs)
             
+            # 해당 카테고리의 문서 타입별 개수
+            type_counts = dict(category_type_counts.get(category_uri, {}))
+            
             radar_chart_data.append({"axis": category_uri, "label": category_name, "value": count})
+            
             categorized_docs_list.append({
-                "category_label": category_name, "category_uri": category_uri,
-                "count": count, "documents": docs
+                "category_label": category_name, 
+                "category_uri": category_uri,
+                "count": count, 
+                "type_counts": type_counts,
+                "documents": docs
             })
 
-        # 7. 최종 JSON 응답
+        # 6. 최종 JSON 응답
         response_data = {
             "current_mode": mode,
             "user_job_template": user_job_template,
@@ -866,9 +1016,11 @@ class PersonaAnalysisView(APIView):
             if uri.startswith(target_prefix) or user_job_template == "default"
         }
         
+        filtered_total_docs = sum(filtered_counts_map.values())
+
         # 3. 필터링된 맵으로 정렬 수행
         sorted_categories = sorted(
-            filtered_counts_map.items(), 
+            filtered_counts_map.items(),
             key=lambda item: item[1], 
             reverse=True
         )
@@ -876,7 +1028,7 @@ class PersonaAnalysisView(APIView):
         # 4. 상위 5개 추출 및 데이터 구성
         top_5_types = []
         for uri, count in sorted_categories[:5]:
-            percent = round((count / valid_total_docs) * 100, 1) if valid_total_docs > 0 else 0
+            percent = round((count / filtered_total_docs) * 100, 1) if filtered_total_docs > 0 else 0
             label = self.CATEGORY_LABELS.get(uri, uri.split(':')[-1])
             keyword = self.CATEGORY_KEYWORDS.get(uri, label) # 키워드 매핑
             
@@ -943,4 +1095,358 @@ class PersonaAnalysisView(APIView):
             "best_persona": best_persona_enriched,  
             "top_4_personas": enriched_top_4,       
         }, status=status.HTTP_200_OK)
+
+# ---------------------------------------------------
+# 3.4 BE: 지능형 검색 API 뷰
+# ---------------------------------------------------
+class SearchView(APIView):
+    """
+    지능형 검색
+    GET /api/search/?q=키워드
+    - Fuseki에 저장된 '의미(Semantic) 정보'를 검색합니다.
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    SCHEMA_URI = "http://api.sseukssak.com/ontology#"
+    FUSEKI_QUERY_ENDPOINT = "http://localhost:3030/sseukssak/query"
+    
+    # 검색 대상으로 삼을 '의미적 관계'들 (OrganizeView의 DISCOVERABLE_PREDICATES 참고)
+    SEARCH_TARGET_PREDICATES = [
+        "sseukssak:discussesTopic",       # 주제
+        "sseukssak:mentionsNamedEntity",  # 고유명사 (기술명, 회사명 등)
+        "sseukssak:mentionsPerson",       # 인물
+        "sseukssak:mentionsPlace",        # 장소
+        "sseukssak:mentionsEvent",        # 이벤트
+        "sseukssak:referencesDate",       # 날짜
+        "sseukssak:requestsAction",       # 행동 요청
+    ]
+    
+    # 헬퍼 함수 재사용 (DashboardView와 동일)
+    _execute_sparql_query = DashboardView._execute_sparql_query
+    _get_documents_from_rdb = DashboardView._get_documents_from_rdb
+
+    def get(self, request):
+        user = request.user
+        user_uri = f"{self.SCHEMA_URI}User_{user.id}"
+        
+        query_keyword = request.query_params.get('q', '').strip()
+        
+        if not query_keyword:
+            return Response(
+                {"message": "검색어를 입력해주세요.", "results": []},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 1. (Fuseki) SPARQL 검색 쿼리 생성
+        # - 사용자의 문서(?doc) 중에서
+        # - 우리가 지정한 관계(?p)를 가지고 있고
+        # - 그 대상(?o)이 검색어를 포함(REGEX)하는 경우를 찾음
+        
+        # 검색 대상 Predicate들을 쿼리용 문자열로 변환 (<...>, <...>)
+        predicate_list_str = ", ".join(
+            f"<{self.SCHEMA_URI}{p.split(':')[-1]}>" for p in self.SEARCH_TARGET_PREDICATES
+        )
+
+        sparql_query = f"""
+        PREFIX sseukssak: <{self.SCHEMA_URI}>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+        SELECT DISTINCT ?doc_id ?predicate ?object
+        WHERE {{
+            ?doc sseukssak:hasOwner <{user_uri}> .
+            
+            # 지정된 관계(?p)들 중에서만 검색
+            ?doc ?predicate ?object .
+            FILTER(?predicate IN ({predicate_list_str}))
+            
+            # 검색어 포함 여부 (대소문자 무시 'i')
+            FILTER regex(str(?object), "{query_keyword}", "i")
+            
+            # 문서 ID 추출
+            BIND(STRAFTER(STR(?doc), "Document_") AS ?doc_id_str)
+            BIND(xsd:integer(?doc_id_str) AS ?doc_id)
+        }}
+        """
+        
+        sparql_results = self._execute_sparql_query(sparql_query)
+        
+        # 2. (RDB) 문서 상세 정보 가져오기
+        found_doc_ids = {int(res["doc_id"]["value"]) for res in sparql_results}
+        doc_details_map = self._get_documents_from_rdb(found_doc_ids)
+        
+        # 3. (BE) 결과 데이터 조립
+        # - 단순히 문서만 주는 게 아니라, "왜(Why)" 검색되었는지(매칭된 이유)를 알려줍니다.
+        search_results = []
+        
+        # Fuseki 결과(매칭된 '이유')를 문서별로 그룹화
+        # { doc_id: [ {"reason": "mentionsNamedEntity", "match": "Django"}, ... ] }
+        match_reasons = defaultdict(list)
+        for res in sparql_results:
+            doc_id = int(res["doc_id"]["value"])
+            predicate = res["predicate"]["value"].replace(self.SCHEMA_URI, "sseukssak:")
+            obj_value = res["object"]["value"]
+            
+            match_reasons[doc_id].append({
+                "predicate": predicate, # 예: sseukssak:mentionsNamedEntity
+                "match": obj_value      # 예: Django
+            })
+            
+        # 최종 리스트 생성
+        for doc_id, details in doc_details_map.items():
+            reasons = match_reasons.get(doc_id, [])
+            
+            search_results.append({
+                "document": details,  # RDB의 문서 정보 (id, title, summary...)
+                "matched_reasons": reasons # 검색된 이유 (메타데이터 매칭 정보)
+            })
+            
+        return Response({
+            "keyword": query_keyword,
+            "count": len(search_results),
+            "results": search_results
+        }, status=status.HTTP_200_OK)
+
+# ---------------------------------------------------
+# 3.1 BE: 북마크 API 뷰
+# ---------------------------------------------------
+class BookmarkImportView(APIView):
+    """
+    북마크 HTML 업로드 -> URL 스크레이핑 -> TextDocument 자동 생성
+    POST /api/bookmarks/import/
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    # 한 번에 너무 많이 긁지 않도록 안전 장치 (원하면 늘릴 수 있음)
+    MAX_BOOKMARKS = 50
+
+    def post(self, request):
+        # 1) 파일 검증
+        s = BookmarkUploadSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        upload_file = s.validated_data["file"]
+
+        # 2) 북마크 HTML → URL/제목 리스트 추출
+        bookmarks = extract_bookmarks_from_html(upload_file)
+        total_in_file = len(bookmarks)
+
+        if total_in_file == 0:
+            return Response(
+                {
+                    "original_filename": upload_file.name,
+                    "total_bookmarks_in_file": 0,
+                    "processed": 0,
+                    "created_documents": [],
+                    "failed": [],
+                    "message": "북마크 파일에서 URL을 찾지 못했습니다.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # 3) 너무 많으면 앞에서부터 MAX_BOOKMARKS까지만 처리
+        bookmarks_to_process = bookmarks[: self.MAX_BOOKMARKS]
+
+        created_docs_info = []
+        failed_list = []
+
+        user = request.user
+
+        for item in bookmarks_to_process:
+            url = item.get("url")
+            bm_title = item.get("title") or ""
+
+            # 3-1) URL 스크레이핑 시도
+            scraped = scrape_url(url)
+            if scraped is None or not scraped.get("text"):
+                failed_list.append(
+                    {
+                        "url": url,
+                        "reason": "fetch_failed_or_empty",
+                    }
+                )
+                continue
+
+            page_title = scraped.get("title") or ""
+            text = scraped.get("text") or ""
+
+            # 3-2) 최종 문서 제목 결정
+            # 우선순위: 페이지 title > 북마크 title > URL 자체
+            final_title = page_title or bm_title or url
+
+            # 3-3) TextDocument 생성
+            doc = TextDocument.objects.create(
+                author=user,
+                title=final_title[:200],   # CharField max_length=200
+                content=text,
+                is_organized=False,
+                summary="",
+                file_path=url,
+                uploaded_file=None,        # 업로드 파일 없음
+            )
+
+            created_docs_info.append(
+                {
+                    "id": doc.id,
+                    "title": doc.title,
+                    "url": url,
+                    "created_at": doc.created_at.isoformat(),
+                }
+            )
+
+        return Response(
+            {
+                "original_filename": upload_file.name,
+                "total_bookmarks_in_file": total_in_file,
+                "processed": len(bookmarks_to_process),
+                "created_count": len(created_docs_info),
+                "created_documents": created_docs_info,
+                "failed": failed_list,
+                "note": (
+                    "processed는 실제로 처리 시도한 북마크 수입니다. "
+                    f"최대 {self.MAX_BOOKMARKS}개까지만 처리하도록 제한되어 있습니다."
+                ),
+            },
+            status=status.HTTP_200_OK,
+        )
+
+# ========================================
+# 3.2 BE : Gmail Integration
+# ========================================
+# @api_view(['POST'])
+# @permission_classes([IsAuthenticated])
+# def sync_gmail_to_documents(request):
+#     """
+#     Gmail을 가져와서 TextDocument에 저장
+#     POST /api/sync-gmail/
+#     Body: { "max": 10 }
+#     """
+#     user = request.user
+    
+#     if not user.gmail_refresh_token:
+#         return Response(
+#             {"detail": "Gmail not connected. Please login with Google first."},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
+    
+#     try:
+#         # 1. Gmail 목록 가져오기
+#         max_results = request.data.get('max', 10)
+#         messages = list_messages_for_user(user, label_ids=['INBOX'], max_results=max_results)
+        
+#         synced_count = 0
+#         skipped_count = 0
+#         synced_list = []
+        
+#         # 2. 각 메일 처리
+#         for msg_info in messages:
+#             message_id = msg_info['id']
+#             gmail_url = f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+            
+#             # 이미 저장된 메일인지 확인
+#             if TextDocument.objects.filter(author=user, file_path=gmail_url).exists():
+#                 skipped_count += 1
+#                 continue
+            
+#             # 메일 상세 정보 가져오기
+#             msg = get_message_detail_for_user(user, message_id)
+#             subject, body_text = extract_subject_and_body(msg)
+            
+#             # 헤더에서 필요한 정보 추출
+#             headers = msg.get('payload', {}).get('headers', [])
+#             sender = ""
+#             date_str = ""
+            
+#             for header in headers:
+#                 if header['name'].lower() == 'from':
+#                     sender = header['value']
+#                 elif header['name'].lower() == 'date':
+#                     date_str = header['value']
+            
+#             # 빈 본문 건너뛰기
+#             if not body_text or len(body_text.strip()) < 10:
+#                 skipped_count += 1
+#                 continue
+            
+#             # 3. TextDocument에 저장
+#             doc = TextDocument.objects.create(
+#                 author=user,
+#                 title=f"[Gmail] {subject[:100]}",
+#                 content=body_text[:5000],
+#                 file_path=gmail_url,
+#                 is_organized=False,
+#                 sender=sender,
+#                 email_date=date_str,
+#             )
+            
+#             synced_count += 1
+#             synced_list.append({
+#                 "id": message_id,
+#                 "doc_id": doc.id,
+#                 "title": subject[:100],
+#                 "sender": sender,
+#                 "date": date_str
+#             })
+        
+#         # 4. 간단한 응답 반환
+#         return Response({
+#             "message": f"{synced_count}개의 메일을 가져왔습니다",
+#             "synced": synced_count,
+#             "skipped": skipped_count,
+#             "total": len(messages),
+#             "emails": synced_list
+#         }, status=status.HTTP_200_OK)
+        
+#     except Exception as e:
+#         return Response(
+#             {"detail": "Failed to sync Gmail", "error": str(e)},
+#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#         )
+
+
+# @api_view(['GET'])
+# @permission_classes([IsAuthenticated])
+# def gmail_message_detail(request, message_id):
+#     """
+#     특정 Gmail 메시지 상세 조회
+#     GET /api/gmail/<message_id>/
+#     """
+#     user = request.user
+    
+#     if not user.gmail_refresh_token:
+#         return Response(
+#             {"detail": "Gmail not connected"},
+#             status=status.HTTP_400_BAD_REQUEST
+#         )
+    
+#     try:
+#         msg = get_message_detail_for_user(user, message_id)
+#         subject, body_text = extract_subject_and_body(msg)
+        
+#         # 헤더에서 필요한 정보 추출
+#         headers = msg.get('payload', {}).get('headers', [])
+#         sender = ""
+#         date_str = ""
+        
+#         for header in headers:
+#             if header['name'].lower() == 'from':
+#                 sender = header['value']
+#             elif header['name'].lower() == 'date':
+#                 date_str = header['value']
+        
+#         return Response({
+#             "id": message_id,
+#             "subject": subject,
+#             "content": body_text,
+#             "sender": sender,
+#             "date": date_str,
+#             "gmail_url": f"https://mail.google.com/mail/u/0/#inbox/{message_id}"
+#         }, status=status.HTTP_200_OK)
+        
+#     except Exception as e:
+#         return Response(
+#             {"detail": "Failed to fetch message", "error": str(e)},
+#             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+#         )
     

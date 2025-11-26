@@ -1,5 +1,9 @@
 # users/views.py
 
+from django.conf import settings
+from django.http import JsonResponse
+from django.shortcuts import redirect
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
@@ -7,23 +11,32 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-from django.conf import settings
-
-from .serializers import RegisterSerializer, LoginSerializer, UserSerializer
-from .models import CustomUser
-
-# --- Google OAuth2 ---
 from google.oauth2 import id_token
 from google.auth.transport import requests as grequests
+from .google_oauth import create_google_flow
 
+from .models import CustomUser
+from .serializers import RegisterSerializer, LoginSerializer, UserSerializer
+from .google_oauth import create_google_flow
+from .gmail_service import (
+    list_messages_for_user,
+    get_message_detail_for_user,
+    extract_subject_and_body,
+)
+from .ai_client import analyze_text_with_ai
+
+
+# --------------------
+# íšŒì›ê°€ì… / ë¡œê·¸ì¸ / ë‚´ ì •ë³´
+# --------------------
 
 class RegisterView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        s = RegisterSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
-        user = s.save()
+        serializer = RegisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
@@ -31,9 +44,9 @@ class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        s = LoginSerializer(data=request.data)
-        s.is_valid(raise_exception=True)
-        user = s.validated_data["user"]
+        serializer = LoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data["user"]
         refresh = RefreshToken.for_user(user)
         return Response(
             {
@@ -50,14 +63,11 @@ class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # ¼öÁ¤µÈ UserSerializer »ç¿ë
         serializer = UserSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    # PATCH ¿äÃ»À¸·Î »ç¿ëÀÚ Á¤º¸(job_template) ¾÷µ¥ÀÌÆ®
     def patch(self, request):
         user = request.user
-        # partial=True: 'job_template' ÇÊµå¸¸ ºÎºĞÀûÀ¸·Î ¼öÁ¤ Çã¿ë
         serializer = UserSerializer(user, data=request.data, partial=True)
 
         if serializer.is_valid():
@@ -67,60 +77,250 @@ class MeView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+# --------------------
+# Gmail ì—°ë™ (ëª©ë¡ / ìƒì„¸ / ë¶„ì„)
+# --------------------
+
+class GmailMessageDetailView(APIView):
+    """
+    GET /api/auth/gmail/messages/<message_id>/
+    Gmail ë©”ì¼ í•œ ê°œì˜ ì „ì²´ ë‚´ìš© ê°€ì ¸ì˜¤ê¸°
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, message_id):
+        user = request.user
+        try:
+            msg = get_message_detail_for_user(user, message_id)
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(msg, status=status.HTTP_200_OK)
+
+''' í•„ìš”ì—†ëŠ”ê±° ê°™ì€ë””
+class GmailMessageAnalyzeView(APIView):
+    """
+    POST /api/auth/gmail/messages/<message_id>/analyze/
+    Gmail ë©”ì¼(ì œëª© + ë³¸ë¬¸)ì„ AI ì—”ì§„ìœ¼ë¡œ ë¶„ì„í•˜ê¸°
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, message_id):
+        user = request.user
+
+        # 1) Gmail ë©”ì‹œì§€ ê°€ì ¸ì˜¤ê¸°
+        try:
+            msg = get_message_detail_for_user(user, message_id)
+        except Exception as e:
+            return Response(
+                {"detail": "Failed to fetch Gmail message", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # 2) ì œëª© + ë³¸ë¬¸ ì¶”ì¶œ
+        subject, body_text = extract_subject_and_body(msg)
+
+        if not body_text:
+            return Response(
+                {"detail": "Email body is empty"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 3) ë³¸ë¬¸ ê¸¸ì´ ì œí•œ (ì¤‘ìš”!)
+        MAX_BODY_LENGTH = 2000
+        original_length = len(body_text)
+        
+        if len(body_text) > MAX_BODY_LENGTH:
+            body_text = body_text[:MAX_BODY_LENGTH]
+            print(f"[Analyze] Truncated: {original_length} -> {MAX_BODY_LENGTH}")
+
+        # 4) í”„ë¡¬í”„íŠ¸ ì‘ì„±
+        prompt = (
+            f"Summarize this email in 3-5 bullet points.\n\n"
+            f"Subject: {subject}\n\n"
+            f"Body: {body_text}\n\n"
+            f"Summary:"
+        )
+
+        # 5) AI í˜¸ì¶œ
+        try:
+            print(f"[Analyze] Calling AI for message {message_id}")
+            analysis = analyze_text_with_ai(prompt, timeout=300)
+            print(f"[Analyze] AI response received")
+        except Exception as e:
+            print(f"[Analyze] AI Error: {str(e)}")
+            return Response(
+                {"detail": "Failed to call AI engine", "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # 6) ê²°ê³¼ ë°˜í™˜
+        return Response(
+            {
+                "subject": subject,
+                "body_preview": body_text[:300],
+                "analysis": analysis,
+                "truncated": original_length > MAX_BODY_LENGTH,
+            },
+            status=status.HTTP_200_OK,
+        )
+'''
+        
+        
+# --------------------
+# Google ë¡œê·¸ì¸ 
+# --------------------
 class GoogleLoginView(APIView):
+    """
+    POST /api/auth/google/
+    Body: { "code": "4/0A..." }
+    """
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        # 1) ÇÁ·ĞÆ®¿¡¼­ Àü´Ş¹ŞÀº id_token
-        idt = request.data.get("id_token")
-        if not idt:
-            return Response({"detail": "id_token is required"}, status=400)
-
-        # 2) ¼­¹ö¿¡ ¼³Á¤µÈ Google OAuth Client ID (settings.py¿¡ ¹İµå½Ã µ¿ÀÏÇÑ °ªÀ¸·Î ¼³Á¤)
-        CLIENT_ID = getattr(settings, "GOOGLE_OAUTH_CLIENT_ID", None)
-        if not CLIENT_ID:
+        # 1. í”„ë¡ íŠ¸ì—ì„œ 'code'ë¥¼ ë°›ì•„ì•¼ í•¨ (id_token ì•„ë‹˜!)
+        code = request.data.get("code")
+        
+        if not code:
             return Response(
-                {"detail": "Server is not configured with GOOGLE_OAUTH_CLIENT_ID"},
-                status=500,
+                {"detail": "Google Authorization Code is required (key: 'code')."}, 
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-        # 3) ±¸±Û ÅäÅ« °ËÁõ
         try:
-            info = id_token.verify_oauth2_token(
-                idt,
+            # 2. Flow ê°ì²´ ìƒì„± ë° Code -> Token êµí™˜
+            flow = create_google_flow()
+            
+            # [ì¤‘ìš”] í”„ë¡ íŠ¸ì—”ë“œê°€ 'postmessage' ë°©ì‹ì„ ì“´ë‹¤ë©´ redirect_urië¥¼ ì´ë ‡ê²Œ ì„¤ì •í•´ì•¼ í•¨
+            # (Reactì˜ useGoogleLogin hook ì‚¬ìš© ì‹œ ë³´í†µ 'postmessage'ì„)
+            flow.redirect_uri = 'postmessage' 
+            
+            flow.fetch_token(code=code)
+            credentials = flow.credentials
+
+            # 3. ì´ë©”ì¼ ì •ë³´ íšë“ (id_token ë””ì½”ë”©)
+            id_info = id_token.verify_oauth2_token(
+                credentials.id_token,
                 grequests.Request(),
-                audience=CLIENT_ID,
+                settings.GOOGLE_OAUTH_CLIENT_ID,
             )
-            # ±ÇÀå: ¹ß±ŞÃ³(issuer) È®ÀÎ
-            if info.get("iss") not in (
-                "accounts.google.com",
-                "https://accounts.google.com",
-            ):
-                return Response({"detail": "Invalid issuer"}, status=400)
+            email = id_info["email"]
+
+            # 4. ìœ ì € ìƒì„±/ì¡°íšŒ
+            user, created = CustomUser.objects.get_or_create(email=email)
+
+            # 5. [í•µì‹¬] Refresh Token ì €ì¥
+            # ì£¼ì˜: ì‚¬ìš©ìê°€ ì²˜ìŒ ë™ì˜í–ˆì„ ë•Œë§Œ ì¤ë‹ˆë‹¤. (ì´ë¯¸ ë™ì˜í–ˆìœ¼ë©´ ì•ˆ ì˜´)
+            if credentials.refresh_token:
+                user.gmail_refresh_token = credentials.refresh_token
+                user.save()
+                print(f"âœ… Refresh Token Saved for {email}")
+            else:
+                print(f"âš ï¸ No Refresh Token for {email}. (User might need to revoke permissions)")
+
+            # 6. ì„œë¹„ìŠ¤ ìì²´ í† í° ë°œê¸‰
+            refresh = RefreshToken.for_user(user)
+
+            return Response(
+                {
+                    "user": UserSerializer(user).data,
+                    "access": str(refresh.access_token),
+                    "refresh": str(refresh),
+                    "is_new_user": created,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         except Exception as e:
-            # µğ¹ö±ëÀ» ½±°Ô ÇÏ·Á°í ¿¡·¯ ¸Ş½ÃÁöµµ ÇÔ²² ¹İÈ¯ (·ÎÄÃ¿¡¼­¸¸ »ç¿ë ±ÇÀå)
-            return Response({"detail": "Invalid id_token", "error": str(e)}, status=400)
+            print(f"[Google Login Error] {e}")
+            return Response(
+                {"detail": "Login failed", "error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
 
-        # 4) ÀÌ¸ŞÀÏ °ËÁõ
-        email = info.get("email")
-        email_verified = info.get("email_verified", False)
-        if not email or not email_verified:
-            return Response({"detail": "Unverified Google account"}, status=400)
+# --------------------
+# Google OAuth ì„œë²„ ë¦¬ë‹¤ì´ë ‰íŠ¸ ë°©ì‹ (login / callback)
+# --------------------
+def google_login(request):
+    """
+    GET /api/auth/google/login/
+    Google ë¡œê·¸ì¸ í˜ì´ì§€ë¡œ ë¦¬ë‹¤ì´ë ‰íŠ¸ ì‹œì¼œì£¼ëŠ” ì—”ë“œí¬ì¸íŠ¸
+    """
+    flow = create_google_flow()
+    authorization_url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
 
-        # 5) »ç¿ëÀÚ Á¶È¸/»ı¼º (±¸±Û °èÁ¤Àº ºñ¹Ğ¹øÈ£ »ç¿ë ¾È ÇÔ)
-        user, created = CustomUser.objects.get_or_create(email=email, defaults={})
-        if created:
-            user.set_unusable_password()
+    # CSRF ë°©ì§€ë¥¼ ìœ„í•´ stateë¥¼ ì„¸ì…˜ì— ì €ì¥
+    request.session["google_auth_state"] = state
+
+    return redirect(authorization_url)
+
+
+def google_callback(request):
+    """
+    GET /api/auth/google/callback/
+    Googleì´ ë¦¬ë‹¤ì´ë ‰íŠ¸í•´ì£¼ëŠ” ì½œë°± URL.
+    ì—¬ê¸°ì„œ í† í° êµí™˜ + ìœ ì € ìƒì„±/ì¡°íšŒ + JWT ë°œê¸‰ê¹Œì§€ ì²˜ë¦¬í•˜ê³  JSONìœ¼ë¡œ ì‘ë‹µ.
+    """
+    try:
+        # ì „ì²´ ì½œë°± URL (code, state í¬í•¨)
+        authorization_response = request.build_absolute_uri()
+
+        # Google OAuth Flow ìƒì„±
+        flow = create_google_flow()
+
+        # authorization code â†’ access/refresh token êµí™˜
+        flow.fetch_token(authorization_response=authorization_response)
+        credentials = flow.credentials  # access_token, refresh_token, id_token ë“±
+
+        print(f"[Google Login] Access Token: {credentials.token[:10]}...")
+        print(f"[Google Login] Refresh Token: {credentials.refresh_token}")
+
+        # id_token ê²€ì¦í•´ì„œ êµ¬ê¸€ ê³„ì • ì •ë³´ ì–»ê¸°
+        id_info = id_token.verify_oauth2_token(
+            credentials.id_token,
+            grequests.Request(),
+            settings.GOOGLE_OAUTH_CLIENT_ID,
+        )
+        email = id_info["email"]
+
+        # ìš°ë¦¬ ì„œë¹„ìŠ¤ ìœ ì € ìƒì„± or ì¡°íšŒ
+        user, is_new_user = CustomUser.objects.get_or_create(email=email)
+
+        # Gmailìš© refresh_token ìˆìœ¼ë©´ ìœ ì €ì— ì €ì¥ (CustomUserì— í•„ë“œ ìˆë‹¤ê³  ê°€ì •)
+        refresh_token_google = credentials.refresh_token
+        if refresh_token_google:
+            user.gmail_refresh_token = refresh_token_google
             user.save()
 
-        # 6) JWT ¹ß±Ş
+        # ìš°ë¦¬ ì„œë¹„ìŠ¤ìš© JWT ë°œê¸‰
         refresh = RefreshToken.for_user(user)
-        return Response(
+        access = refresh.access_token
+
+        # í”„ë¡ íŠ¸ë¡œ redirect ëŒ€ì‹  JSONìœ¼ë¡œ ì‘ë‹µ
+        return JsonResponse(
             {
+                "message": "google oauth callback ok (Gmail scope included)",
+                "has_refresh_token": refresh_token_google is not None,
                 "user": UserSerializer(user).data,
-                "access": str(refresh.access_token),
+                "access": str(access),
                 "refresh": str(refresh),
-                "is_new_user": created,
+                "is_new_user": is_new_user,
             },
             status=200,
+        )
+
+    except Exception as e:
+        return JsonResponse(
+            {
+                "detail": "Authentication failed",
+                "error": str(e),
+            },
+            status=400,
         )
